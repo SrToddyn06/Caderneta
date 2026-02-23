@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Enable .dark class support in Tailwind 4 */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --app-font-size: 16px;
+}
+
+[data-font-size="sm"] { --app-font-size: 14px; }
+[data-font-size="md"] { --app-font-size: 18px; }
+[data-font-size="lg"] { --app-font-size: 22px; }
+
+html {
+  font-size: var(--app-font-size);
+}
+
+body {
+  @apply bg-slate-50 text-slate-900 transition-colors duration-200 dark:bg-slate-950 dark:text-slate-100;
+  overflow: hidden;
+}
+
+/* Custom scrollbar for accessibility */
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-slate-100 dark:bg-slate-900;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-400 rounded-full dark:bg-slate-600;
+}
