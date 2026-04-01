@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type WorkEntry } from '../db';
-import { ArrowLeft, Trash2, CheckCircle2, Plus, Calendar as CalendarIcon, FileText, MoreVertical, MessageSquare, UserCog } from 'lucide-react';
+import { useSettings } from '../contexts/SettingsContext';
+import { useUndo } from '../contexts/UndoContext';
+import { ArrowLeft, Trash2, CheckCircle2, Plus, Calendar as CalendarIcon, FileText, MoreVertical, MessageSquare, UserCog, ReceiptText, Copy, Share2, MessageCircle, Send, Pin, PinOff, Pencil } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { formatCurrency } from '../lib/utils';
 import { format, parseISO, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay } from 'date-fns';
@@ -13,6 +15,7 @@ interface EmployeeDetailProps {
 }
 
 export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
+  const { showUndo } = useUndo();
   const [isAddingEntry, setIsAddingEntry] = useState(false);
   const [entryAmount, setEntryAmount] = useState('');
   const [entryNote, setEntryNote] = useState('');
@@ -29,10 +32,22 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
   const [partialPaymentModal, setPartialPaymentModal] = useState(false);
   const [partialAmount, setPartialAmount] = useState('');
 
+  const [receiptModal, setReceiptModal] = useState<{
+    employeeName: string;
+    amount: number;
+    date: string;
+    note?: string;
+  } | null>(null);
+
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editName, setEditName] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editAmount, setEditAmount] = useState('');
+
+  const [editingEntry, setEditingEntry] = useState<WorkEntry | null>(null);
+  const [editEntryAmount, setEditEntryAmount] = useState('');
+  const [editEntryNote, setEditEntryNote] = useState('');
+  const [editEntryDate, setEditEntryDate] = useState('');
 
   const employee = useLiveQuery(() => db.employees.get(employeeId), [employeeId]);
   const entries = useLiveQuery(
@@ -41,6 +56,11 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
   );
 
   const unpaidTotal = entries?.reduce((acc, entry) => acc + (entry.isPaid ? 0 : entry.amountCents), 0) || 0;
+
+  const handleTogglePin = async () => {
+    if (!employee) return;
+    await db.employees.update(employeeId, { isPinned: employee.isPinned ? 0 : 1 });
+  };
 
   const handleShareWhatsApp = () => {
     if (!employee) return;
@@ -56,6 +76,20 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
     setEditPhone(employee.phone || '');
     setEditAmount((employee.defaultAmountCents / 100).toString());
     setIsEditingProfile(true);
+  };
+
+  const formatPhone = (value: string) => {
+    const numbers = value.replace(/\D/g, '');
+    if (numbers.length <= 2) return numbers;
+    if (numbers.length <= 6) return `(${numbers.slice(0, 2)}) ${numbers.slice(2)}`;
+    if (numbers.length <= 10) return `(${numbers.slice(0, 2)}) ${numbers.slice(2, 6)}-${numbers.slice(6)}`;
+    return `(${numbers.slice(0, 2)}) ${numbers.slice(2, 7)}-${numbers.slice(7, 11)}`;
+  };
+
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>, setter: (v: string) => void) => {
+    const value = e.target.value;
+    const formatted = formatPhone(value);
+    setter(formatted);
   };
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
@@ -86,14 +120,64 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
     setIsAddingEntry(false);
   };
 
+  const startEditingEntry = (entry: WorkEntry) => {
+    setEditingEntry(entry);
+    setEditEntryAmount((entry.amountCents / 100).toString());
+    setEditEntryNote(entry.note);
+    setEditEntryDate(entry.dateIso);
+  };
+
+  const handleUpdateEntry = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingEntry?.id) return;
+
+    const previousData = { ...editingEntry };
+    const newData = {
+      amountCents: Math.round(parseFloat(editEntryAmount) * 100),
+      note: editEntryNote,
+      dateIso: editEntryDate
+    };
+
+    await db.workEntries.update(editingEntry.id, newData);
+    
+    showUndo({
+      label: 'Lançamento atualizado',
+      onUndo: async () => {
+        await db.workEntries.update(editingEntry.id!, previousData);
+      }
+    });
+
+    setEditingEntry(null);
+  };
+
   const handleMarkAllPaid = async () => {
+    const totalToPay = unpaidTotal;
+    const unpaidEntriesBefore = entries?.filter(e => !e.isPaid) || [];
+    
     setConfirmModal({
       title: 'Marcar tudo como pago',
-      message: 'Deseja marcar todos os lançamentos pendentes como pagos?',
+      message: `Deseja marcar todos os lançamentos pendentes (${formatCurrency(totalToPay)}) como pagos?`,
       type: 'success',
       onConfirm: async () => {
-        await db.workEntries.where('employeeId').equals(employeeId).modify({ isPaid: 1 });
+        const entryIds = unpaidEntriesBefore.map(e => e.id).filter((id): id is number => id !== undefined);
+        await db.workEntries.where('id').anyOf(entryIds).modify({ isPaid: 1 });
+        
+        showUndo({
+          label: 'Pagamento total realizado',
+          onUndo: async () => {
+            await db.workEntries.where('id').anyOf(entryIds).modify({ isPaid: 0 });
+          }
+        });
+
         setConfirmModal(null);
+        if (employee) {
+          setReceiptModal({
+            employeeName: employee.name,
+            amount: totalToPay,
+            date: format(new Date(), 'yyyy-MM-dd'),
+            note: 'Pagamento total de débitos'
+          });
+        }
       }
     });
   };
@@ -105,6 +189,7 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
 
   const executePartialPayment = async () => {
     let amountToAbate = Math.round(parseFloat(partialAmount) * 100);
+    const originalAmount = amountToAbate;
     if (isNaN(amountToAbate) || amountToAbate <= 0) return;
 
     const unpaidEntries = await db.workEntries
@@ -135,16 +220,40 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
       }
     }
     setPartialPaymentModal(false);
+    if (employee) {
+      setReceiptModal({
+        employeeName: employee.name,
+        amount: originalAmount,
+        date: format(new Date(), 'yyyy-MM-dd'),
+        note: 'Pagamento Parcial'
+      });
+    }
   };
 
   const handleDeleteEmployee = async () => {
+    if (!employee) return;
+    const employeeData = { ...employee };
+    const employeeEntries = entries ? [...entries] : [];
+
     setConfirmModal({
       title: 'Excluir Funcionário',
-      message: 'Tem certeza que deseja excluir este funcionário e todos os seus registros? Esta ação não pode ser desfeita.',
+      message: 'Tem certeza que deseja excluir este funcionário e todos os seus registros?',
       type: 'danger',
       onConfirm: async () => {
         await db.workEntries.where('employeeId').equals(employeeId).delete();
         await db.employees.delete(employeeId);
+        
+        showUndo({
+          label: `Funcionário ${employeeData.name} excluído`,
+          onUndo: async () => {
+            const newId = await db.employees.add(employeeData);
+            if (employeeEntries.length > 0) {
+              const entriesToRestore = employeeEntries.map(e => ({ ...e, employeeId: newId as number }));
+              await db.workEntries.bulkAdd(entriesToRestore);
+            }
+          }
+        });
+
         setConfirmModal(null);
         onBack();
       }
@@ -153,19 +262,60 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
 
   const togglePaid = async (entry: WorkEntry) => {
     if (!entry.id) return;
-    await db.workEntries.update(entry.id, { isPaid: entry.isPaid ? 0 : 1 });
+    const previousState = entry.isPaid;
+    await db.workEntries.update(entry.id, { isPaid: previousState ? 0 : 1 });
+    
+    showUndo({
+      label: previousState ? 'Lançamento marcado como pendente' : 'Lançamento marcado como pago',
+      onUndo: async () => {
+        await db.workEntries.update(entry.id!, { isPaid: previousState });
+      }
+    });
   };
 
   const deleteEntry = async (id: number) => {
+    const entryToDelete = await db.workEntries.get(id);
+    if (!entryToDelete) return;
+
     setConfirmModal({
       title: 'Excluir Lançamento',
-      message: 'Deseja excluir este lançamento permanentemente?',
+      message: 'Deseja excluir este lançamento?',
       type: 'danger',
       onConfirm: async () => {
         await db.workEntries.delete(id);
+        
+        showUndo({
+          label: 'Lançamento excluído',
+          onUndo: async () => {
+            await db.workEntries.add(entryToDelete);
+          }
+        });
+
         setConfirmModal(null);
       }
     });
+  };
+
+  const generateReceiptText = (data: any) => {
+    return `📄 *COMPROVANTE DE PAGAMENTO*\n\n` +
+           `👤 *Funcionário:* ${data.employeeName}\n` +
+           `💰 *Valor:* ${formatCurrency(data.amount)}\n` +
+           `📅 *Data:* ${format(parseISO(data.date), 'dd/MM/yyyy')}\n` +
+           (data.note ? `📝 *Obs:* ${data.note}\n` : '') +
+           `\n✅ Pagamento confirmado!`;
+  };
+
+  const handleCopyReceipt = (data: any) => {
+    const text = generateReceiptText(data).replace(/\*/g, '');
+    navigator.clipboard.writeText(text);
+    alert('Recibo copiado para a área de transferência!');
+  };
+
+  const handleShareReceipt = (data: any) => {
+    const text = generateReceiptText(data);
+    const encoded = encodeURIComponent(text);
+    const phone = employee?.phone.replace(/\D/g, '') || '';
+    window.open(`https://wa.me/${phone}?text=${encoded}`, '_blank');
   };
 
   if (!employee) return null;
@@ -178,9 +328,20 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
             <ArrowLeft className="w-6 h-6" />
           </button>
           <div className="flex gap-2">
+            <button 
+              onClick={handleTogglePin} 
+              className={`p-2 transition-all active:scale-90 ${
+                employee.isPinned 
+                  ? 'text-amber-500 bg-amber-50 dark:bg-amber-900/20 rounded-xl' 
+                  : 'text-slate-600 dark:text-slate-400'
+              }`}
+            >
+              {employee.isPinned ? <PinOff className="w-6 h-6" /> : <Pin className="w-6 h-6" />}
+            </button>
             {employee.phone && (
-              <button onClick={handleShareWhatsApp} className="p-2 text-emerald-600 dark:text-emerald-400">
-                <MessageSquare className="w-6 h-6" />
+              <button onClick={handleShareWhatsApp} className="p-2 text-emerald-600 dark:text-emerald-400 relative group">
+                <MessageCircle className="w-7 h-7" />
+                <Send className="w-3 h-3 absolute top-1 right-1 bg-white dark:bg-slate-900 rounded-full" />
               </button>
             )}
             <button onClick={startEditing} className="p-2 text-slate-600 dark:text-slate-400">
@@ -272,12 +433,35 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
                   )}
                 </div>
               </div>
-              <button 
-                onClick={() => entry.id && deleteEntry(entry.id)}
-                className="p-2 text-slate-300 hover:text-red-500 transition-colors"
-              >
-                <Trash2 className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button 
+                  onClick={() => startEditingEntry(entry)}
+                  className="p-2 text-slate-400 hover:text-emerald-500 transition-colors"
+                  title="Editar Lançamento"
+                >
+                  <Pencil className="w-4 h-4" />
+                </button>
+                {entry.isPaid === 1 && (
+                  <button 
+                    onClick={() => setReceiptModal({
+                      employeeName: employee.name,
+                      amount: entry.amountCents,
+                      date: entry.dateIso,
+                      note: entry.note
+                    })}
+                    className="p-2 text-emerald-500 hover:text-emerald-600 transition-colors"
+                    title="Gerar Recibo"
+                  >
+                    <ReceiptText className="w-5 h-5" />
+                  </button>
+                )}
+                <button 
+                  onClick={() => entry.id && deleteEntry(entry.id)}
+                  className="p-2 text-slate-300 hover:text-red-500 transition-colors"
+                >
+                  <Trash2 className="w-5 h-5" />
+                </button>
+              </div>
             </motion.div>
           ))}
           
@@ -440,6 +624,7 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
                   <input
                     required
                     type="text"
+                    maxLength={50}
                     className="w-full p-4 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
                     value={editName}
                     onChange={(e) => setEditName(e.target.value)}
@@ -450,9 +635,10 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
                   <label className="text-sm font-bold text-slate-500 uppercase tracking-wider">Telefone</label>
                   <input
                     type="tel"
+                    placeholder="(00) 00000-0000"
                     className="w-full p-4 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
                     value={editPhone}
-                    onChange={(e) => setEditPhone(e.target.value)}
+                    onChange={(e) => handlePhoneChange(e, setEditPhone)}
                   />
                 </div>
 
@@ -474,6 +660,112 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
                   Salvar Alterações
                 </button>
               </form>
+            </motion.div>
+          </div>
+        )}
+
+        {editingEntry && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4">
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              className="bg-white dark:bg-slate-900 w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 space-y-6 shadow-2xl"
+            >
+              <div className="flex justify-between items-center">
+                <h2 className="text-2xl font-bold">Editar Lançamento</h2>
+                <button onClick={() => setEditingEntry(null)} className="text-slate-400 p-2">
+                  <Plus className="w-8 h-8 rotate-45" />
+                </button>
+              </div>
+
+              <form onSubmit={handleUpdateEntry} className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-500 uppercase tracking-wider">Valor (R$)</label>
+                  <input
+                    autoFocus
+                    required
+                    type="number"
+                    step="0.01"
+                    className="w-full p-4 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-2xl font-bold"
+                    value={editEntryAmount}
+                    onChange={(e) => setEditEntryAmount(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-500 uppercase tracking-wider">Data</label>
+                  <input
+                    type="date"
+                    className="w-full p-4 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+                    value={editEntryDate}
+                    onChange={(e) => setEditEntryDate(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-500 uppercase tracking-wider">Observação</label>
+                  <input
+                    type="text"
+                    maxLength={100}
+                    className="w-full p-4 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+                    value={editEntryNote}
+                    onChange={(e) => setEditEntryNote(e.target.value)}
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full bg-emerald-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg shadow-emerald-600/20 active:scale-95 transition-all"
+                >
+                  Salvar Alterações
+                </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+
+        {receiptModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white dark:bg-slate-900 w-full max-w-xs rounded-3xl p-6 space-y-4 shadow-2xl"
+            >
+              <div className="text-center space-y-2">
+                <div className="w-12 h-12 bg-emerald-100 dark:bg-emerald-900/30 rounded-full flex items-center justify-center mx-auto text-emerald-600 dark:text-emerald-400">
+                  <ReceiptText className="w-6 h-6" />
+                </div>
+                <h3 className="text-xl font-bold">Recibo Gerado</h3>
+              </div>
+
+              <div className="bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 font-mono text-[10px] whitespace-pre-wrap leading-relaxed">
+                {generateReceiptText(receiptModal)}
+              </div>
+
+              <div className="flex flex-col gap-2 pt-2">
+                <button
+                  onClick={() => handleShareReceipt(receiptModal)}
+                  className="w-full py-3 rounded-xl font-bold text-white bg-emerald-600 shadow-lg shadow-emerald-600/20 active:scale-95 transition-all flex items-center justify-center gap-2"
+                >
+                  <Share2 className="w-4 h-4" />
+                  Compartilhar WhatsApp
+                </button>
+                <button
+                  onClick={() => handleCopyReceipt(receiptModal)}
+                  className="w-full py-3 rounded-xl font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20 active:scale-95 transition-all flex items-center justify-center gap-2"
+                >
+                  <Copy className="w-4 h-4" />
+                  Copiar Texto
+                </button>
+                <button
+                  onClick={() => setReceiptModal(null)}
+                  className="w-full py-3 rounded-xl font-bold text-slate-500 bg-slate-100 dark:bg-slate-800 active:scale-95 transition-all"
+                >
+                  Fechar
+                </button>
+              </div>
             </motion.div>
           </div>
         )}

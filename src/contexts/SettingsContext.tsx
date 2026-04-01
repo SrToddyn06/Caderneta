@@ -13,7 +13,26 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const settings = useLiveQuery(() => db.settings.get(1));
 
   const updateSettings = async (newSettings: Partial<Settings>) => {
-    await db.settings.update(1, newSettings);
+    try {
+      const currentSettings = await db.settings.get(1);
+      if (currentSettings) {
+        await db.settings.put({ ...currentSettings, ...newSettings });
+      } else {
+        // Fallback if settings don't exist for some reason
+        await db.settings.put({
+          id: 1,
+          fontSize: 'md',
+          highContrast: false,
+          theme: 'light',
+          autoBackup: false,
+          debtThresholdCents: 50000,
+          ...newSettings
+        } as Settings);
+      }
+    } catch (error) {
+      console.error('Failed to update settings:', error);
+      throw error;
+    }
   };
 
   useEffect(() => {

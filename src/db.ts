@@ -6,6 +6,7 @@ export interface Employee {
   phone: string;
   defaultAmountCents: number;
   createdAt: number;
+  isPinned?: number; // 0 or 1
 }
 
 export interface WorkEntry {
@@ -24,19 +25,28 @@ export interface Settings {
   highContrast: boolean;
   theme: 'light' | 'dark';
   autoBackup: boolean;
+  debtThresholdCents: number;
+}
+
+export interface BackupEntry {
+  id: number;
+  data: string; // JSON string
+  timestamp: number;
 }
 
 export class CadernetaDB extends Dexie {
   employees!: Table<Employee>;
   workEntries!: Table<WorkEntry>;
   settings!: Table<Settings>;
+  backups!: Table<BackupEntry>;
 
   constructor() {
     super('CadernetaDB');
-    this.version(1).stores({
+    this.version(2).stores({
       employees: '++id, name, phone',
       workEntries: '++id, employeeId, dateIso, isPaid',
-      settings: 'id'
+      settings: 'id',
+      backups: 'id'
     });
   }
 }
@@ -52,7 +62,8 @@ db.on('ready', async () => {
       fontSize: 'md',
       highContrast: false,
       theme: 'light',
-      autoBackup: false
+      autoBackup: false,
+      debtThresholdCents: 50000 // R$ 500,00
     });
   }
 });
