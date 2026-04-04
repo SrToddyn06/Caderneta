@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<resources>
-    <string name="app_name">Caderneta</string>
-    <string name="title_activity_main">Caderneta</string>
-    <string name="package_name">com.caderneta.app</string>
-    <string name="custom_url_scheme">com.caderneta.app</string>
-</resources>
