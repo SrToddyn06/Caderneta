@@ -141,7 +141,7 @@ export function EmployeeList({ onSelectEmployee }: EmployeeListProps) {
 
   return (
     <div className="flex flex-col">
-      <div className="p-4 space-y-4 sticky top-0 bg-slate-50/80 dark:bg-slate-950/80 backdrop-blur-md z-10">
+      <div className="p-4 safe-top space-y-4 sticky top-0 bg-slate-50/80 dark:bg-slate-950/80 backdrop-blur-md z-10">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <h1 className="text-3xl font-black tracking-tight text-slate-900 dark:text-white uppercase">Caderneta</h1>

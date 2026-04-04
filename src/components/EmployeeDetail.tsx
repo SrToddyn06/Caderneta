@@ -370,7 +370,7 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
 
   return (
     <div className="flex flex-col bg-slate-50 dark:bg-slate-950">
-      <header className="bg-white dark:bg-slate-900 p-4 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-10">
+      <header className="bg-white dark:bg-slate-900 p-4 safe-top border-b border-slate-200 dark:border-slate-800 sticky top-0 z-10">
         <div className="flex items-center justify-between mb-4">
           <button onClick={onBack} className="p-2 -ml-2 text-slate-600 dark:text-slate-400">
             <ArrowLeft className="w-6 h-6" />

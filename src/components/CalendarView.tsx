@@ -56,7 +56,7 @@ export function CalendarView() {
   const prevMonth = () => setCurrentMonth(subMonths(currentMonth, 1));
 
   return (
-    <div className="p-4 space-y-6 pb-32 flex flex-col">
+    <div className="p-4 safe-top space-y-6 pb-32 flex flex-col">
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-black tracking-tight capitalize">

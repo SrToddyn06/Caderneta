@@ -60,7 +60,7 @@ export function HistoryView() {
   }
 
   return (
-    <div className="p-4 space-y-6 pb-32 flex flex-col">
+    <div className="p-4 safe-top space-y-6 pb-32 flex flex-col">
       <header>
         <h1 className="text-3xl font-black tracking-tight">Histórico</h1>
         <p className="text-slate-500 font-bold">Pagamentos Realizados</p>

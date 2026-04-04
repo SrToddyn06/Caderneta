@@ -44,6 +44,7 @@ function AppContent() {
   useEffect(() => {
     const updateStatusBar = async () => {
       try {
+        await StatusBar.setOverlaysWebView({ overlay: true });
         if (settings?.theme === 'dark') {
           await StatusBar.setStyle({ style: Style.Dark });
           await StatusBar.setBackgroundColor({ color: '#020617' }); // slate-950
@@ -212,7 +213,7 @@ function AppContent() {
         )}
       </AnimatePresence>
 
-      <nav className="absolute bottom-0 left-0 right-0 bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border-t border-slate-200 dark:border-slate-800 p-4 pb-6 flex justify-around items-center z-30 shadow-[0_-8px_30px_rgba(0,0,0,0.08)]">
+      <nav className="absolute bottom-0 left-0 right-0 bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border-t border-slate-200 dark:border-slate-800 p-4 safe-bottom flex justify-around items-center z-30 shadow-[0_-8px_30px_rgba(0,0,0,0.08)]">
         <button
           onClick={() => navigateToView('employees')}
           className={`flex flex-col items-center gap-1 transition-all ${
