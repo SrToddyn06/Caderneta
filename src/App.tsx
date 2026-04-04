@@ -55,6 +55,28 @@ function AppContent() {
   };
 
   // Auto-backup logic
+  const allData = useLiveQuery(async () => {
+    const employees = await db.employees.toArray();
+    const workEntries = await db.workEntries.toArray();
+    return { employees, workEntries };
+  }, []);
+
+  useEffect(() => {
+    if (allData && (allData.employees.length > 0 || allData.workEntries.length > 0)) {
+      const timeout = setTimeout(() => {
+        // Create backup in Dexie
+        const backup = { ...allData, timestamp: Date.now() };
+        db.backups.put({
+          id: 1,
+          data: JSON.stringify(backup),
+          timestamp: Date.now()
+        });
+      }, 2000); // Debounce 2s
+      
+      return () => clearTimeout(timeout);
+    }
+  }, [allData]);
+
   const renderView = () => {
     if (selectedEmployeeId) {
       return (
