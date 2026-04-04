@@ -42,13 +42,19 @@ export function UndoProvider({ children }: { children: React.ReactNode }) {
     timerRef.current = setInterval(() => {
       setTimeLeft(prev => {
         if (prev <= 1) {
-          // Commit the oldest action that timed out
+          // Commit the NEWEST action (the one currently visible)
           setActionsStack(prevStack => {
-            const [oldest, ...rest] = prevStack;
-            if (oldest?.onCommit) oldest.onCommit();
-            return rest;
+            const newest = prevStack[prevStack.length - 1];
+            if (newest?.onCommit) newest.onCommit();
+            const newStack = prevStack.slice(0, -1);
+            
+            // If there are more actions, reset timer for the next one
+            if (newStack.length === 0) {
+              clearTimer();
+            }
+            return newStack;
           });
-          return 5; // Reset for next action in stack
+          return 5; 
         }
         return prev - 1;
       });

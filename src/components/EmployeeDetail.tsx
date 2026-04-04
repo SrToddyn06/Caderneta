@@ -59,7 +59,15 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
 
   const handleTogglePin = async () => {
     if (!employee) return;
-    await db.employees.update(employeeId, { isPinned: employee.isPinned ? 0 : 1 });
+    const previousPinned = employee.isPinned;
+    await db.employees.update(employeeId, { isPinned: previousPinned ? 0 : 1 });
+
+    showUndo({
+      label: previousPinned ? 'Funcionário desfixado' : 'Funcionário fixado',
+      onUndo: async () => {
+        await db.employees.update(employeeId, { isPinned: previousPinned });
+      }
+    });
   };
 
   const handleShareWhatsApp = () => {
@@ -106,13 +114,20 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
     e.preventDefault();
     if (!entryAmount) return;
 
-    await db.workEntries.add({
+    const entryId = await db.workEntries.add({
       employeeId,
       amountCents: Math.round(parseFloat(entryAmount) * 100),
       dateIso: entryDate,
       note: entryNote,
       isPaid: 0,
       createdAt: Date.now()
+    });
+
+    showUndo({
+      label: 'Lançamento adicionado',
+      onUndo: async () => {
+        await db.workEntries.delete(entryId as number);
+      }
     });
 
     setEntryAmount('');
@@ -198,17 +213,26 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
       .filter(e => !e.isPaid)
       .sortBy('dateIso');
 
+    const previousEntries = await db.workEntries.where('employeeId').equals(employeeId).toArray();
+    const entryIdsAffected: number[] = [];
+    const newEntriesCreated: number[] = [];
+
+    // We need a way to undo this complex operation.
+    // The simplest way is to store the state of all entries for this employee before the operation.
+    // But that might be heavy. Let's just store the IDs of modified entries and the IDs of new entries.
+
     for (const entry of unpaidEntries) {
       if (amountToAbate <= 0) break;
       if (!entry.id) continue;
 
+      entryIdsAffected.push(entry.id);
       if (amountToAbate >= entry.amountCents) {
         amountToAbate -= entry.amountCents;
         await db.workEntries.update(entry.id, { isPaid: 1 });
       } else {
         const remaining = entry.amountCents - amountToAbate;
         await db.workEntries.update(entry.id, { amountCents: amountToAbate, isPaid: 1 });
-        await db.workEntries.add({
+        const newId = await db.workEntries.add({
           employeeId,
           amountCents: remaining,
           dateIso: entry.dateIso,
@@ -216,9 +240,27 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
           isPaid: 0,
           createdAt: Date.now()
         });
+        newEntriesCreated.push(newId as number);
         amountToAbate = 0;
       }
     }
+
+    showUndo({
+      label: 'Pagamento parcial realizado',
+      onUndo: async () => {
+        // Restore previous state
+        for (const oldEntry of previousEntries) {
+          if (oldEntry.id) {
+            await db.workEntries.put(oldEntry);
+          }
+        }
+        // Delete any new entries created by the partial payment
+        if (newEntriesCreated.length > 0) {
+          await db.workEntries.bulkDelete(newEntriesCreated);
+        }
+      }
+    });
+
     setPartialPaymentModal(false);
     if (employee) {
       setReceiptModal({
@@ -308,7 +350,13 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
   const handleCopyReceipt = (data: any) => {
     const text = generateReceiptText(data).replace(/\*/g, '');
     navigator.clipboard.writeText(text);
-    alert('Recibo copiado para a área de transferência!');
+    // Use showUndo for a non-intrusive notification (even if not undoable)
+    // Or just a simple state-based toast if we had one.
+    // Let's use showUndo with a dummy onUndo to show the message.
+    showUndo({
+      label: 'Recibo copiado!',
+      onUndo: () => {}
+    });
   };
 
   const handleShareReceipt = (data: any) => {

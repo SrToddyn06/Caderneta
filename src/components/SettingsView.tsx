@@ -14,6 +14,16 @@ export function SettingsView() {
   const [saveError, setSaveError] = React.useState<string | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
+  const [hasBackup, setHasBackup] = React.useState(false);
+
+  React.useEffect(() => {
+    const checkBackup = async () => {
+      const backup = await db.backups.get(1);
+      setHasBackup(!!backup);
+    };
+    checkBackup();
+  }, []);
+
   const handleUpdateSetting = async (newSettings: any) => {
     setIsSaving(true);
     setSaveError(null);
@@ -40,14 +50,14 @@ export function SettingsView() {
     let csv = 'Tipo,ID,Nome/EmployeeID,Telefone/Data,Valor,Nota,Pago\n';
     
     employees.forEach(e => {
-      csv += `Funcionario,${e.id},"${e.name}",${e.phone},${e.defaultAmountCents},,\n`;
+      csv += `Funcionario,${e.id},"${e.name.replace(/"/g, '""')}",${e.phone},${e.defaultAmountCents},,\n`;
     });
 
     entries.forEach(e => {
-      csv += `Lancamento,${e.id},${e.employeeId},${e.dateIso},${e.amountCents},"${e.note}",${e.isPaid}\n`;
+      csv += `Lancamento,${e.id},${e.employeeId},${e.dateIso},${e.amountCents},"${(e.note || '').replace(/"/g, '""')}",${e.isPaid}\n`;
     });
 
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
     link.download = `caderneta_backup_${new Date().toISOString().split('T')[0]}.csv`;
@@ -202,7 +212,7 @@ export function SettingsView() {
           <button
             onClick={handleRestoreFromAuto}
             className="w-full flex items-center justify-between p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 active:scale-95 transition-all disabled:opacity-50"
-            disabled={!localStorage.getItem(BACKUP_KEY)}
+            disabled={!hasBackup}
           >
             <div className="flex items-center gap-3">
               <DatabaseBackup className="text-emerald-500" />

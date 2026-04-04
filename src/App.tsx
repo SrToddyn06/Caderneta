@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { SettingsProvider } from './contexts/SettingsContext';
+import { App as CapApp } from '@capacitor/app';
+import { StatusBar, Style } from '@capacitor/status-bar';
+import { SettingsProvider, useSettings } from './contexts/SettingsContext';
 import { UndoProvider } from './contexts/UndoContext';
 import { EmployeeList } from './components/EmployeeList';
 import { EmployeeDetail } from './components/EmployeeDetail';
@@ -18,6 +20,43 @@ function AppContent() {
   const [currentView, setCurrentView] = useState<View>('employees');
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<number | null>(null);
   const [showRestorePrompt, setShowRestorePrompt] = useState(false);
+
+  const { settings } = useSettings();
+
+  // Capacitor Hardware Back Button
+  useEffect(() => {
+    const setupCapacitor = async () => {
+      CapApp.addListener('backButton', ({ canGoBack }) => {
+        if (canGoBack) {
+          window.history.back();
+        } else {
+          CapApp.exitApp();
+        }
+      });
+    };
+    setupCapacitor();
+    return () => {
+      CapApp.removeAllListeners();
+    };
+  }, []);
+
+  // Sync Status Bar with Theme
+  useEffect(() => {
+    const updateStatusBar = async () => {
+      try {
+        if (settings?.theme === 'dark') {
+          await StatusBar.setStyle({ style: Style.Dark });
+          await StatusBar.setBackgroundColor({ color: '#020617' }); // slate-950
+        } else {
+          await StatusBar.setStyle({ style: Style.Light });
+          await StatusBar.setBackgroundColor({ color: '#f8fafc' }); // slate-50
+        }
+      } catch (e) {
+        // Not on native
+      }
+    };
+    updateStatusBar();
+  }, [settings?.theme]);
 
   // Sync state with browser history (handles system back button)
   useEffect(() => {
@@ -64,13 +103,17 @@ function AppContent() {
 
   useEffect(() => {
     if (allData && (allData.employees.length > 0 || allData.workEntries.length > 0)) {
-      // Create backup in Dexie
-      const backup = { ...allData, timestamp: Date.now() };
-      db.backups.put({
-        id: 1,
-        data: JSON.stringify(backup),
-        timestamp: Date.now()
-      });
+      const timeout = setTimeout(() => {
+        // Create backup in Dexie
+        const backup = { ...allData, timestamp: Date.now() };
+        db.backups.put({
+          id: 1,
+          data: JSON.stringify(backup),
+          timestamp: Date.now()
+        });
+      }, 2000); // Debounce 2s
+      
+      return () => clearTimeout(timeout);
     }
   }, [allData]);
 

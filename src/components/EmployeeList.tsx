@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '../db';
+import { db, type Employee } from '../db';
 import { useSettings } from '../contexts/SettingsContext';
 import { useUndo } from '../contexts/UndoContext';
 import { Plus, Search, User, Phone, ChevronRight, Zap, UserCircle2, UserPlus, AlertTriangle, Pin, PinOff } from 'lucide-react';
@@ -9,6 +9,10 @@ import { formatCurrency } from '../lib/utils';
 
 interface EmployeeListProps {
   onSelectEmployee: (id: number) => void;
+}
+
+interface EmployeeWithDebt extends Employee {
+  debt: number;
 }
 
 export function EmployeeList({ onSelectEmployee }: EmployeeListProps) {
@@ -35,7 +39,7 @@ export function EmployeeList({ onSelectEmployee }: EmployeeListProps) {
           .filter(entry => !entry.isPaid)
           .toArray();
         const debt = unpaid.reduce((acc, entry) => acc + entry.amountCents, 0);
-        return { ...e, debt };
+        return { ...e, debt } as EmployeeWithDebt;
       }));
       
       // Sort: Pinned first, then by name
@@ -56,11 +60,11 @@ export function EmployeeList({ onSelectEmployee }: EmployeeListProps) {
     []
   );
 
-  const handleQuickAdd = async (e: React.MouseEvent, employee: any) => {
+  const handleQuickAdd = async (e: React.MouseEvent, employee: EmployeeWithDebt) => {
     e.stopPropagation();
     if (!employee.id) return;
 
-    await db.workEntries.add({
+    const entryId = await db.workEntries.add({
       employeeId: employee.id,
       dateIso: new Date().toISOString().split('T')[0],
       amountCents: employee.defaultAmountCents,
@@ -69,14 +73,29 @@ export function EmployeeList({ onSelectEmployee }: EmployeeListProps) {
       createdAt: Date.now()
     });
 
+    showUndo({
+      label: `Lançamento para ${employee.name}`,
+      onUndo: async () => {
+        await db.workEntries.delete(entryId as number);
+      }
+    });
+
     setShowQuickSuccess(employee.name);
     setTimeout(() => setShowQuickSuccess(null), 2000);
   };
 
-  const handleTogglePin = async (e: React.MouseEvent, employee: any) => {
+  const handleTogglePin = async (e: React.MouseEvent, employee: EmployeeWithDebt) => {
     e.stopPropagation();
     if (!employee.id) return;
-    await db.employees.update(employee.id, { isPinned: employee.isPinned ? 0 : 1 });
+    const previousPinned = employee.isPinned;
+    await db.employees.update(employee.id, { isPinned: previousPinned ? 0 : 1 });
+
+    showUndo({
+      label: previousPinned ? 'Funcionário desfixado' : 'Funcionário fixado',
+      onUndo: async () => {
+        await db.employees.update(employee.id!, { isPinned: previousPinned });
+      }
+    });
   };
 
   const formatPhone = (value: string) => {
@@ -163,7 +182,7 @@ export function EmployeeList({ onSelectEmployee }: EmployeeListProps) {
           ))
         ) : employees.length > 0 ? (
           employees.map((employee) => {
-            const isHighDebt = (employee as any).debt >= DEBT_THRESHOLD;
+            const isHighDebt = employee.debt >= DEBT_THRESHOLD;
             return (
               <motion.div
                 key={employee.id}
@@ -223,7 +242,7 @@ export function EmployeeList({ onSelectEmployee }: EmployeeListProps) {
                       <Phone className="w-3 h-3" /> {employee.phone || 'Sem telefone'}
                     </p>
                     <p className={`text-xs font-bold ${isHighDebt ? 'text-red-600 dark:text-red-400' : 'text-slate-400'}`}>
-                      Dívida: {formatCurrency((employee as any).debt)}
+                      Dívida: {formatCurrency(employee.debt)}
                     </p>
                     {isHighDebt && (
                       <p className="text-[10px] font-black text-red-600 dark:text-red-400 uppercase tracking-tighter animate-pulse">
