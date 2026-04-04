@@ -22,11 +22,11 @@ html {
 }
 
 .safe-top {
-  padding-top: calc(2.5rem + var(--safe-area-top)) !important;
+  padding-top: calc(0.75rem + var(--safe-area-top)) !important;
 }
 
 .safe-bottom {
-  padding-bottom: calc(2.5rem + var(--safe-area-bottom)) !important;
+  padding-bottom: calc(0.75rem + var(--safe-area-bottom)) !important;
 }
 
 body {

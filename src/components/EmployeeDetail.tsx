@@ -523,12 +523,12 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
 
       <AnimatePresence>
         {isAddingEntry && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4 overflow-y-auto">
             <motion.div
               initial={{ y: '100%' }}
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
-              className="bg-white dark:bg-slate-900 w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 space-y-6 shadow-2xl"
+              className="bg-white dark:bg-slate-900 w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 space-y-6 shadow-2xl my-auto"
             >
               <div className="flex justify-between items-center">
                 <h2 className="text-2xl font-bold">Novo Lançamento</h2>
@@ -652,12 +652,12 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
         )}
 
         {isEditingProfile && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-end sm:items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-end sm:items-center justify-center p-4 overflow-y-auto">
             <motion.div
               initial={{ y: '100%' }}
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
-              className="bg-white dark:bg-slate-900 w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 space-y-6 shadow-2xl"
+              className="bg-white dark:bg-slate-900 w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 space-y-6 shadow-2xl my-auto"
             >
               <div className="flex justify-between items-center">
                 <h2 className="text-2xl font-bold">Editar Perfil</h2>
@@ -713,12 +713,12 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
         )}
 
         {editingEntry && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4 overflow-y-auto">
             <motion.div
               initial={{ y: '100%' }}
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
-              className="bg-white dark:bg-slate-900 w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 space-y-6 shadow-2xl"
+              className="bg-white dark:bg-slate-900 w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 space-y-6 shadow-2xl my-auto"
             >
               <div className="flex justify-between items-center">
                 <h2 className="text-2xl font-bold">Editar Lançamento</h2>
