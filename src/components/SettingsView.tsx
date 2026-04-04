@@ -14,16 +14,6 @@ export function SettingsView() {
   const [saveError, setSaveError] = React.useState<string | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
-  const [hasBackup, setHasBackup] = React.useState(false);
-
-  React.useEffect(() => {
-    const checkBackup = async () => {
-      const backup = await db.backups.get(1);
-      setHasBackup(!!backup);
-    };
-    checkBackup();
-  }, []);
-
   const handleUpdateSetting = async (newSettings: any) => {
     setIsSaving(true);
     setSaveError(null);
@@ -70,15 +60,6 @@ export function SettingsView() {
     downloadBackup({ employees, workEntries, timestamp: Date.now() });
   };
 
-  const handleRestoreFromAuto = async () => {
-    const success = await restoreBackup();
-    if (success) {
-      setSuccessText('Backup restaurado com sucesso!');
-      setShowSuccessMessage(true);
-      setTimeout(() => setShowSuccessMessage(false), 3000);
-    }
-  };
-
   const handleImportJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -112,7 +93,7 @@ export function SettingsView() {
   if (!settings) return null;
 
   return (
-    <div className="p-4 safe-top space-y-6 pb-32">
+    <div className="p-4 space-y-6 pb-24">
       <header>
         <h1 className="text-3xl font-black tracking-tight">Configurações</h1>
         <p className="text-slate-500">Personalize sua experiência</p>
@@ -210,17 +191,6 @@ export function SettingsView() {
           </button>
 
           <button
-            onClick={handleRestoreFromAuto}
-            className="w-full flex items-center justify-between p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 active:scale-95 transition-all disabled:opacity-50"
-            disabled={!hasBackup}
-          >
-            <div className="flex items-center gap-3">
-              <DatabaseBackup className="text-emerald-500" />
-              <span className="font-bold">Restaurar do Auto-Backup</span>
-            </div>
-          </button>
-
-          <button
             onClick={() => fileInputRef.current?.click()}
             className="w-full flex items-center justify-between p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 active:scale-95 transition-all"
           >
@@ -301,7 +271,7 @@ export function SettingsView() {
       </AnimatePresence>
 
       <div className="text-center pt-8 text-slate-400 text-sm">
-        <p>Caderneta v0.2.0</p>
+        <p>Caderneta v1.0</p>
         <p>Desenvolvido para máxima simplicidade.</p>
       </div>
     </div>

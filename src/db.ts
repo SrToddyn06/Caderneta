@@ -24,29 +24,20 @@ export interface Settings {
   fontSize: 'sm' | 'md' | 'lg';
   highContrast: boolean;
   theme: 'light' | 'dark';
-  autoBackup: boolean;
   debtThresholdCents: number;
-}
-
-export interface BackupEntry {
-  id: number;
-  data: string; // JSON string
-  timestamp: number;
 }
 
 export class CadernetaDB extends Dexie {
   employees!: Table<Employee>;
   workEntries!: Table<WorkEntry>;
   settings!: Table<Settings>;
-  backups!: Table<BackupEntry>;
 
   constructor() {
     super('CadernetaDB');
-    this.version(2).stores({
+    this.version(3).stores({
       employees: '++id, name, phone',
       workEntries: '++id, employeeId, dateIso, isPaid',
-      settings: 'id',
-      backups: 'id'
+      settings: 'id'
     });
   }
 }
@@ -62,7 +53,6 @@ db.on('ready', async () => {
       fontSize: 'md',
       highContrast: false,
       theme: 'light',
-      autoBackup: false,
       debtThresholdCents: 50000 // R$ 500,00
     });
   }

@@ -2,35 +2,9 @@ import { db } from '../db';
 
 export const BACKUP_KEY = 'caderneta_auto_backup';
 
-export async function createBackup() {
-  const employees = await db.employees.toArray();
-  const workEntries = await db.workEntries.toArray();
-  const backup = {
-    employees,
-    workEntries,
-    timestamp: Date.now()
-  };
-  
-  // Save to Dexie instead of localStorage to avoid 5MB limit
-  await db.backups.put({
-    id: 1,
-    data: JSON.stringify(backup),
-    timestamp: Date.now()
-  });
-  
-  return backup;
-}
-
 export async function restoreBackup(backupData?: any) {
   let data = backupData;
   
-  if (!data) {
-    const stored = await db.backups.get(1);
-    if (stored) {
-      data = JSON.parse(stored.data);
-    }
-  }
-
   if (!data || !data.employees) return false;
 
   try {
