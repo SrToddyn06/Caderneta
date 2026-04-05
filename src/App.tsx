@@ -12,11 +12,29 @@ import { db } from './db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { BACKUP_KEY, restoreBackup } from './lib/backup';
 
+import { App as CapApp } from '@capacitor/app';
+
 type View = 'employees' | 'calendar' | 'history' | 'settings';
 
 function AppContent() {
   const [currentView, setCurrentView] = useState<View>('employees');
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<number | null>(null);
+
+  // Capacitor Back Button Handling
+  useEffect(() => {
+    const backListener = CapApp.addListener('backButton', ({ canGoBack }) => {
+      if (selectedEmployeeId || currentView !== 'employees') {
+        window.history.back();
+      } else {
+        // On root view, let the app close or minimize
+        CapApp.exitApp();
+      }
+    });
+
+    return () => {
+      backListener.then(l => l.remove());
+    };
+  }, [selectedEmployeeId, currentView]);
 
   // Sync state with browser history (handles system back button)
   useEffect(() => {
