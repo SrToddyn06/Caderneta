@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type WorkEntry } from '../db';
 import { useSettings } from '../contexts/SettingsContext';
@@ -49,9 +49,26 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
   const [editEntryNote, setEditEntryNote] = useState('');
   const [editEntryDate, setEditEntryDate] = useState('');
 
+  // Close modals on back button
+  useEffect(() => {
+    const handleClose = () => {
+      setIsAddingEntry(false);
+      setConfirmModal(null);
+      setPartialPaymentModal(false);
+      setIsEditingProfile(false);
+      setEditingEntry(null);
+      setReceiptModal(null);
+    };
+    window.addEventListener('close-modals', handleClose);
+    return () => window.removeEventListener('close-modals', handleClose);
+  }, []);
+
   const employee = useLiveQuery(() => db.employees.get(employeeId), [employeeId]);
   const entries = useLiveQuery(
-    () => db.workEntries.where('employeeId').equals(employeeId).reverse().sortBy('dateIso'),
+    async () => {
+      const results = await db.workEntries.where('employeeId').equals(employeeId).toArray();
+      return results.sort((a, b) => b.dateIso.localeCompare(a.dateIso) || (b.id || 0) - (a.id || 0));
+    },
     [employeeId]
   );
 
@@ -102,10 +119,26 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!editName.trim()) return;
+
+    // Check for duplicate name (excluding current employee)
+    const existing = await db.employees
+      .where('name')
+      .equals(editName)
+      .filter(emp => emp.id !== employeeId)
+      .first();
+    
+    if (existing) {
+      alert('Já existe outro funcionário com este nome!');
+      return;
+    }
+
+    const amount = Math.abs(parseFloat(editAmount) || 0);
+
     await db.employees.update(employeeId, {
-      name: editName,
+      name: editName.trim(),
       phone: editPhone,
-      defaultAmountCents: Math.round(parseFloat(editAmount) * 100)
+      defaultAmountCents: Math.round(amount * 100)
     });
     setIsEditingProfile(false);
   };
@@ -114,9 +147,11 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
     e.preventDefault();
     if (!entryAmount) return;
 
+    const amount = Math.abs(parseFloat(entryAmount) || 0);
+
     const entryId = await db.workEntries.add({
       employeeId,
-      amountCents: Math.round(parseFloat(entryAmount) * 100),
+      amountCents: Math.round(amount * 100),
       dateIso: entryDate,
       note: entryNote,
       isPaid: 0,
@@ -147,8 +182,9 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
     if (!editingEntry?.id) return;
 
     const previousData = { ...editingEntry };
+    const amount = Math.abs(parseFloat(editEntryAmount) || 0);
     const newData = {
-      amountCents: Math.round(parseFloat(editEntryAmount) * 100),
+      amountCents: Math.round(amount * 100),
       note: editEntryNote,
       dateIso: editEntryDate
     };
@@ -203,7 +239,13 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
   };
 
   const executePartialPayment = async () => {
-    let amountToAbate = Math.round(parseFloat(partialAmount) * 100);
+    let amountToAbate = Math.abs(Math.round(parseFloat(partialAmount) * 100));
+    
+    // Safety: prevent overpayment (brute force protection)
+    if (amountToAbate > unpaidTotal) {
+      amountToAbate = unpaidTotal;
+    }
+    
     const originalAmount = amountToAbate;
     if (isNaN(amountToAbate) || amountToAbate <= 0) return;
 
@@ -214,36 +256,32 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
       .sortBy('dateIso');
 
     const previousEntries = await db.workEntries.where('employeeId').equals(employeeId).toArray();
-    const entryIdsAffected: number[] = [];
     const newEntriesCreated: number[] = [];
 
-    // We need a way to undo this complex operation.
-    // The simplest way is to store the state of all entries for this employee before the operation.
-    // But that might be heavy. Let's just store the IDs of modified entries and the IDs of new entries.
+    await db.transaction('rw', [db.workEntries], async () => {
+      for (const entry of unpaidEntries) {
+        if (amountToAbate <= 0) break;
+        if (!entry.id) continue;
 
-    for (const entry of unpaidEntries) {
-      if (amountToAbate <= 0) break;
-      if (!entry.id) continue;
-
-      entryIdsAffected.push(entry.id);
-      if (amountToAbate >= entry.amountCents) {
-        amountToAbate -= entry.amountCents;
-        await db.workEntries.update(entry.id, { isPaid: 1 });
-      } else {
-        const remaining = entry.amountCents - amountToAbate;
-        await db.workEntries.update(entry.id, { amountCents: amountToAbate, isPaid: 1 });
-        const newId = await db.workEntries.add({
-          employeeId,
-          amountCents: remaining,
-          dateIso: entry.dateIso,
-          note: `${entry.note} (Restante de pagamento parcial)`,
-          isPaid: 0,
-          createdAt: Date.now()
-        });
-        newEntriesCreated.push(newId as number);
-        amountToAbate = 0;
+        if (amountToAbate >= entry.amountCents) {
+          amountToAbate -= entry.amountCents;
+          await db.workEntries.update(entry.id, { isPaid: 1 });
+        } else {
+          const remaining = entry.amountCents - amountToAbate;
+          await db.workEntries.update(entry.id, { amountCents: amountToAbate, isPaid: 1 });
+          const newId = await db.workEntries.add({
+            employeeId,
+            amountCents: remaining,
+            dateIso: entry.dateIso,
+            note: `${entry.note} (Restante de pagamento parcial)`,
+            isPaid: 0,
+            createdAt: Date.now()
+          });
+          newEntriesCreated.push(newId as number);
+          amountToAbate = 0;
+        }
       }
-    }
+    });
 
     showUndo({
       label: 'Pagamento parcial realizado',
@@ -282,8 +320,10 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
       message: 'Tem certeza que deseja excluir este funcionário e todos os seus registros?',
       type: 'danger',
       onConfirm: async () => {
-        await db.workEntries.where('employeeId').equals(employeeId).delete();
-        await db.employees.delete(employeeId);
+        await db.transaction('rw', [db.workEntries, db.employees], async () => {
+          await db.workEntries.where('employeeId').equals(employeeId).delete();
+          await db.employees.delete(employeeId);
+        });
         
         showUndo({
           label: `Funcionário ${employeeData.name} excluído`,
@@ -369,8 +409,8 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
   if (!employee) return null;
 
   return (
-    <div className="flex flex-col bg-slate-50 dark:bg-slate-950">
-      <header className="bg-white dark:bg-slate-900 p-4 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-10">
+    <div className="flex flex-col bg-slate-50 dark:bg-black pb-32">
+      <header className="bg-white dark:bg-slate-900 p-4 safe-top border-b border-slate-200 dark:border-slate-800 sticky top-0 z-10">
         <div className="flex items-center justify-between mb-4">
           <button onClick={onBack} className="p-2 -ml-2 text-slate-600 dark:text-slate-400">
             <ArrowLeft className="w-6 h-6" />

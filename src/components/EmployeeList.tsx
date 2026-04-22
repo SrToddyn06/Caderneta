@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Employee } from '../db';
 import { useSettings } from '../contexts/SettingsContext';
@@ -24,6 +24,13 @@ export function EmployeeList({ onSelectEmployee }: EmployeeListProps) {
   const [newPhone, setNewPhone] = useState('');
   const [newAmount, setNewAmount] = useState('0');
   const [showQuickSuccess, setShowQuickSuccess] = useState<string | null>(null);
+
+  // Close modals on back button
+  useEffect(() => {
+    const handleClose = () => setIsAdding(false);
+    window.addEventListener('close-modals', handleClose);
+    return () => window.removeEventListener('close-modals', handleClose);
+  }, []);
 
   const DEBT_THRESHOLD = settings?.debtThresholdCents || 50000; // R$ 500,00
 
@@ -116,13 +123,22 @@ export function EmployeeList({ onSelectEmployee }: EmployeeListProps) {
     e.preventDefault();
     if (!newName) return;
 
+    const amount = Math.abs(parseFloat(newAmount) || 0);
+
     const employeeData = {
-      name: newName,
+      name: newName.trim(),
       phone: newPhone,
-      defaultAmountCents: Math.round(parseFloat(newAmount) * 100) || 0,
+      defaultAmountCents: Math.round(amount * 100),
       createdAt: Date.now(),
       isPinned: 0
     };
+
+    // Check for duplicate name
+    const existing = await db.employees.where('name').equals(newName.trim()).first();
+    if (existing) {
+      alert('Já existe um funcionário com este nome!');
+      return;
+    }
 
     const id = await db.employees.add(employeeData);
 
@@ -141,7 +157,7 @@ export function EmployeeList({ onSelectEmployee }: EmployeeListProps) {
 
   return (
     <div className="flex flex-col">
-      <div className="p-4 space-y-4 sticky top-0 bg-slate-50/80 dark:bg-slate-950/80 backdrop-blur-md z-10">
+      <div className="p-4 safe-top space-y-4 sticky top-0 bg-slate-50/80 dark:bg-black/80 backdrop-blur-md z-10">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <h1 className="text-3xl font-black tracking-tight text-slate-900 dark:text-white uppercase">Caderneta</h1>

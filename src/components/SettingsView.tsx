@@ -16,6 +16,13 @@ export function SettingsView() {
 
   const [hasBackup, setHasBackup] = React.useState(false);
 
+  // Close modals on back button
+  React.useEffect(() => {
+    const handleClose = () => setIsConfirmingClear(false);
+    window.addEventListener('close-modals', handleClose);
+    return () => window.removeEventListener('close-modals', handleClose);
+  }, []);
+
   React.useEffect(() => {
     const checkBackup = async () => {
       const backup = await db.backups.get(1);
@@ -112,7 +119,7 @@ export function SettingsView() {
   if (!settings) return null;
 
   return (
-    <div className="p-4 space-y-6 pb-24">
+    <div className="p-4 safe-top space-y-6 pb-24 flex flex-col">
       <header>
         <h1 className="text-3xl font-black tracking-tight">Configurações</h1>
         <p className="text-slate-500">Personalize sua experiência</p>

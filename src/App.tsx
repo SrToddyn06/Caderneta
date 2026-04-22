@@ -4,9 +4,9 @@ import { UndoProvider } from './contexts/UndoContext';
 import { EmployeeList } from './components/EmployeeList';
 import { EmployeeDetail } from './components/EmployeeDetail';
 import { CalendarView } from './components/CalendarView';
-import { HistoryView } from './components/HistoryView';
+import { StatsView } from './components/StatsView';
 import { SettingsView } from './components/SettingsView';
-import { Users2, CalendarDays, Clock3, Settings2, DatabaseBackup, History } from 'lucide-react';
+import { Users2, CalendarDays, BarChart3, Settings2, DatabaseBackup, History } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { db } from './db';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -22,11 +22,17 @@ function AppContent() {
 
   // Capacitor Back Button Handling
   useEffect(() => {
-    const backListener = CapApp.addListener('backButton', ({ canGoBack }) => {
+    const backListener = CapApp.addListener('backButton', () => {
+      // If any modal is open (identified by fixed inset-0), close them first
+      const hasOpenModal = !!document.querySelector('.fixed.inset-0');
+      if (hasOpenModal) {
+        window.dispatchEvent(new CustomEvent('close-modals'));
+        return;
+      }
+
       if (selectedEmployeeId || currentView !== 'employees') {
         window.history.back();
       } else {
-        // On root view, let the app close or minimize
         CapApp.exitApp();
       }
     });
@@ -111,7 +117,7 @@ function AppContent() {
       case 'calendar':
         return <CalendarView />;
       case 'history':
-        return <HistoryView />;
+        return <StatsView />;
       case 'settings':
         return <SettingsView />;
       default:
@@ -120,7 +126,7 @@ function AppContent() {
   };
 
   return (
-    <div className="max-w-md mx-auto h-screen flex flex-col bg-slate-50 dark:bg-slate-950 shadow-2xl overflow-hidden relative">
+    <div className="w-full max-w-md mx-auto h-[100dvh] flex flex-col bg-slate-50 dark:bg-black shadow-2xl overflow-hidden relative safe-p-x">
       <main className="flex-1 relative overflow-hidden">
         <AnimatePresence mode="wait">
           <motion.div
@@ -136,7 +142,7 @@ function AppContent() {
         </AnimatePresence>
       </main>
 
-      <nav className="absolute bottom-0 left-0 right-0 bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border-t border-slate-200 dark:border-slate-800 p-4 flex justify-around items-center z-30 shadow-[0_-8px_30px_rgba(0,0,0,0.08)]">
+      <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/90 dark:bg-black/90 backdrop-blur-xl border-t border-slate-200 dark:border-slate-800 px-4 pt-4 safe-bottom flex justify-around items-center z-40 shadow-[0_-8px_30px_rgba(0,0,0,0.15)]">
         <button
           onClick={() => navigateToView('employees')}
           className={`flex flex-col items-center gap-1 transition-all ${
@@ -163,8 +169,8 @@ function AppContent() {
             currentView === 'history' ? 'text-emerald-600 dark:text-emerald-400 scale-110' : 'text-slate-400'
           }`}
         >
-          <Clock3 className="w-7 h-7" />
-          <span className="text-[10px] font-black uppercase tracking-tighter">Histórico</span>
+          <BarChart3 className="w-7 h-7" />
+          <span className="text-[10px] font-black uppercase tracking-tighter">Resumo</span>
         </button>
 
         <button
