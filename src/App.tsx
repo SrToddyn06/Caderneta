@@ -6,7 +6,7 @@ import { EmployeeDetail } from './components/EmployeeDetail';
 import { CalendarView } from './components/CalendarView';
 import { StatsView } from './components/StatsView';
 import { SettingsView } from './components/SettingsView';
-import { Users2, CalendarDays, BarChart3, Settings2, DatabaseBackup, History } from 'lucide-react';
+import { Users2, CalendarDays, BarChart3, Settings, DatabaseBackup, History } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { db } from './db';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -179,8 +179,8 @@ function AppContent() {
             currentView === 'settings' ? 'text-emerald-600 dark:text-emerald-400 scale-110' : 'text-slate-400'
           }`}
         >
-          <Settings2 className="w-7 h-7" />
-          <span className="text-[10px] font-black uppercase tracking-tighter">Ajustes</span>
+          <Settings className="w-7 h-7" />
+          <span className="text-[10px] font-black uppercase tracking-tighter">Config</span>
         </button>
       </nav>
     </div>
