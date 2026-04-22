@@ -125,16 +125,22 @@ export function EmployeeList({ onSelectEmployee }: EmployeeListProps) {
 
     const amount = Math.abs(parseFloat(newAmount) || 0);
 
+    const normalizedName = newName.trim();
+    if (!normalizedName) return;
+
     const employeeData = {
-      name: newName.trim(),
+      name: normalizedName,
       phone: newPhone,
       defaultAmountCents: Math.round(amount * 100),
       createdAt: Date.now(),
       isPinned: 0
     };
 
-    // Check for duplicate name
-    const existing = await db.employees.where('name').equals(newName.trim()).first();
+    // Check for duplicate name (case-insensitive)
+    const existing = await db.employees
+      .filter(e => e.name.toLowerCase() === normalizedName.toLowerCase())
+      .first();
+    
     if (existing) {
       alert('Já existe um funcionário com este nome!');
       return;
@@ -349,7 +355,8 @@ export function EmployeeList({ onSelectEmployee }: EmployeeListProps) {
                     autoFocus
                     required
                     type="text"
-                    maxLength={50}
+                    maxLength={30}
+                    placeholder="Ex: João Silva"
                     className="w-full p-4 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
                     value={newName}
                     onChange={(e) => setNewName(e.target.value)}

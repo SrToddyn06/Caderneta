@@ -66,12 +66,18 @@ export function StatsView() {
       }).filter(e => e.total > 0).sort((a, b) => b.total - a.total).slice(0, 5);
 
       // Top Debtors (All Time)
-      const debtorStats = await Promise.all(allEmployees.map(async emp => {
-        const unpaidSub = await db.workEntries.where('employeeId').equals(emp.id!).filter(e => !e.isPaid).toArray();
-        const total = unpaidSub.reduce((acc, e) => acc + e.amountCents, 0);
-        return { name: emp.name, total };
-      }));
-      const topDebtors = debtorStats.filter(e => e.total > 0).sort((a, b) => b.total - a.total).slice(0, 5);
+      // Optimization: Fetch all unpaid once and group in memory to avoid N database calls
+      const allUnpaid = await db.workEntries.where('isPaid').equals(0).toArray();
+      const debtMap = new Map<number, number>();
+      allUnpaid.forEach(entry => {
+        debtMap.set(entry.employeeId, (debtMap.get(entry.employeeId) || 0) + entry.amountCents);
+      });
+
+      const topDebtors = allEmployees
+        .map(emp => ({ name: emp.name, total: debtMap.get(emp.id!) || 0 }))
+        .filter(e => e.total > 0)
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 5);
 
       return {
         currentTotal,

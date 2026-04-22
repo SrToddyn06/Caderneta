@@ -119,13 +119,12 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editName.trim()) return;
+    const normalizedName = editName.trim();
+    if (!normalizedName) return;
 
-    // Check for duplicate name (excluding current employee)
+    // Check for duplicate name (case-insensitive, excluding current)
     const existing = await db.employees
-      .where('name')
-      .equals(editName)
-      .filter(emp => emp.id !== employeeId)
+      .filter(emp => emp.name.toLowerCase() === normalizedName.toLowerCase() && emp.id !== employeeId)
       .first();
     
     if (existing) {
@@ -136,7 +135,7 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
     const amount = Math.abs(parseFloat(editAmount) || 0);
 
     await db.employees.update(employeeId, {
-      name: editName.trim(),
+      name: normalizedName,
       phone: editPhone,
       defaultAmountCents: Math.round(amount * 100)
     });
@@ -605,6 +604,8 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
                   <label className="text-sm font-bold text-slate-500 uppercase tracking-wider">Observação (Opcional)</label>
                   <input
                     type="text"
+                    maxLength={100}
+                    placeholder="Ex: Diária de sábado"
                     className="w-full p-4 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
                     value={entryNote}
                     onChange={(e) => setEntryNote(e.target.value)}
