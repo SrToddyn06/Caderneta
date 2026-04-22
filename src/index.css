@@ -48,15 +48,13 @@ body {
   padding-right: var(--safe-area-right);
 }
 
-/* Custom scrollbar for accessibility */
+/* Custom scrollbar - keep hidden for native app feel */
 ::-webkit-scrollbar {
-  width: 10px;
+  width: 0px;
+  height: 0px;
+  background: transparent;
 }
 
-::-webkit-scrollbar-track {
-  @apply bg-slate-100 dark:bg-slate-900;
-}
-
-::-webkit-scrollbar-thumb {
-  @apply bg-slate-400 rounded-full dark:bg-slate-600;
+::selection {
+  @apply bg-emerald-100 text-emerald-900;
 }

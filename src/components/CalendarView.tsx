@@ -151,17 +151,6 @@ export function CalendarView() {
         </div>
 
         <div className="space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
-            <h2 className="text-xl font-bold">
-              {isSameDay(selectedDate, new Date()) ? 'Hoje' : format(selectedDate, "dd 'de' MMMM", { locale: ptBR })}
-            </h2>
-            {selectedDayEntries && selectedDayEntries.length > 0 && (
-              <p className="text-emerald-600 dark:text-emerald-400 font-black">
-                Total: {formatCurrency(totalDayAmount)}
-              </p>
-            )}
-          </div>
-          
           <AnimatePresence mode="wait">
             {selectedDayEntries && selectedDayEntries.length > 0 ? (
               selectedDayEntries.map((entry, idx) => (
