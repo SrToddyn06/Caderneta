@@ -117,7 +117,6 @@ export function StatsView() {
     <div className="p-4 safe-top space-y-6 pb-32 flex flex-col">
       <header>
         <h1 className="text-3xl font-black tracking-tight">Estatísticas</h1>
-        <p className="text-slate-500 font-bold">Desempenho Financeiro</p>
       </header>
 
       <div className="grid grid-cols-2 gap-3">

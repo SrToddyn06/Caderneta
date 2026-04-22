@@ -122,7 +122,6 @@ export function SettingsView() {
     <div className="p-4 safe-top space-y-6 pb-24 flex flex-col">
       <header>
         <h1 className="text-3xl font-black tracking-tight">Configurações</h1>
-        <p className="text-slate-500">Personalize sua experiência</p>
       </header>
 
       <section className="space-y-4">
@@ -308,7 +307,7 @@ export function SettingsView() {
       </AnimatePresence>
 
       <div className="text-center pt-8 text-slate-400 text-sm">
-        <p>Caderneta v1.0</p>
+        <p>Caderneta v1.1</p>
         <p>Desenvolvido para máxima simplicidade.</p>
       </div>
     </div>
