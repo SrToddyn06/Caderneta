@@ -1,9 +1,11 @@
 import React from 'react';
 import { useSettings } from '../contexts/SettingsContext';
 import { db } from '../db';
-import { Moon, Sun, Type, ShieldAlert, Download, Upload, Trash2, X, FileJson, DatabaseBackup } from 'lucide-react';
+import { Moon, Sun, Type, ShieldAlert, Download, Upload, Trash2, X, FileJson, DatabaseBackup, Bell } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { downloadBackup, restoreBackup, BACKUP_KEY } from '../lib/backup';
+import { getPaymentLogs, savePaymentLogs } from '../lib/paymentDatabase';
+import { scheduleDailyReminder, cancelDailyReminder } from '../lib/notifications';
 
 export function SettingsView() {
   const { settings, updateSettings } = useSettings();
@@ -52,7 +54,7 @@ export function SettingsView() {
 
   const handleExportCSV = async () => {
     const employees = await db.employees.toArray();
-    const entries = await db.workEntries.toArray();
+    const entries = getPaymentLogs();
 
     let csv = 'Tipo,ID,Nome/EmployeeID,Telefone/Data,Valor,Nota,Pago\n';
     
@@ -61,7 +63,7 @@ export function SettingsView() {
     });
 
     entries.forEach(e => {
-      csv += `Lancamento,${e.id},${e.employeeId},${e.dateIso},${e.amountCents},"${(e.note || '').replace(/"/g, '""')}",${e.isPaid}\n`;
+      csv += `Lancamento,${e.id},${e.employeeId},${e.date},${e.value * 100},"${(e.note || '').replace(/"/g, '""')}",${e.isPaid}\n`;
     });
 
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
@@ -74,7 +76,8 @@ export function SettingsView() {
   const handleExportJSON = async () => {
     const employees = await db.employees.toArray();
     const workEntries = await db.workEntries.toArray();
-    downloadBackup({ employees, workEntries, timestamp: Date.now() });
+    const paymentLogs = getPaymentLogs();
+    downloadBackup({ employees, workEntries, paymentLogs, timestamp: Date.now() });
   };
 
   const handleRestoreFromAuto = async () => {
@@ -110,6 +113,7 @@ export function SettingsView() {
   const handleClearAll = async () => {
     await db.workEntries.clear();
     await db.employees.clear();
+    savePaymentLogs([]);
     setIsConfirmingClear(false);
     setSuccessText('Todos os dados foram apagados com sucesso.');
     setShowSuccessMessage(true);
@@ -181,8 +185,8 @@ export function SettingsView() {
           <input
             type="range"
             min="100"
-            max="2000"
-            step="50"
+            max="10000"
+            step="100"
             value={(settings.debtThresholdCents || 50000) / 100}
             onChange={(e) => handleUpdateSetting({ debtThresholdCents: parseInt(e.target.value) * 100 })}
             className="w-full h-2 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-red-500"
@@ -198,6 +202,66 @@ export function SettingsView() {
               <span className="text-[10px] font-black text-red-600 uppercase">{saveError}</span>
             )}
           </div>
+        </div>
+      </section>
+
+      <section className="space-y-4">
+        <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest text-emerald-600 dark:text-emerald-400">Lembrete Diário</h2>
+        <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-4">
+          <div className="flex justify-between items-center">
+            <div className="flex items-center gap-3">
+              <Bell className={settings.notificationsEnabled ? 'text-emerald-500' : 'text-slate-400'} />
+              <div>
+                <span className="font-bold block">Notificações</span>
+                <span className="text-xs text-slate-500 block">Lembrar para revisar e anotar os valores às {settings.notificationTime || '18:00'}</span>
+              </div>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={!!settings.notificationsEnabled}
+                onChange={async (e) => {
+                  const enabled = e.target.checked;
+                  if (enabled) {
+                    const scheduled = await scheduleDailyReminder(settings.notificationTime || '18:00');
+                    if (scheduled) {
+                      handleUpdateSetting({ notificationsEnabled: true });
+                    } else {
+                      alert('Não foi possível ativar as notificações. Por favor, conceda permissão para notificações nas configurações do seu celular.');
+                    }
+                  } else {
+                    await cancelDailyReminder();
+                    handleUpdateSetting({ notificationsEnabled: false });
+                  }
+                }}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-slate-200 dark:bg-slate-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 dark:after:border-slate-600 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+            </label>
+          </div>
+
+          <AnimatePresence>
+            {settings.notificationsEnabled && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-4 overflow-hidden"
+              >
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Horário do Alerta</span>
+                <input
+                  type="time"
+                  value={settings.notificationTime || '18:00'}
+                  onChange={async (e) => {
+                    const newTime = e.target.value;
+                    await handleUpdateSetting({ notificationTime: newTime });
+                    await scheduleDailyReminder(newTime);
+                  }}
+                  className="px-3 py-1.5 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-bold focus:outline-none focus:border-emerald-500"
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </section>
 

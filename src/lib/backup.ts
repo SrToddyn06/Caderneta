@@ -1,13 +1,16 @@
 import { db } from '../db';
+import { getPaymentLogs, savePaymentLogs } from './paymentDatabase';
 
 export const BACKUP_KEY = 'caderneta_auto_backup';
 
 export async function createBackup() {
   const employees = await db.employees.toArray();
   const workEntries = await db.workEntries.toArray();
+  const paymentLogs = getPaymentLogs();
   const backup = {
     employees,
     workEntries,
+    paymentLogs,
     timestamp: Date.now()
   };
   
@@ -39,8 +42,28 @@ export async function restoreBackup(backupData?: any) {
       await db.workEntries.clear();
       
       await db.employees.bulkAdd(data.employees);
-      await db.workEntries.bulkAdd(data.workEntries);
+      if (data.workEntries) {
+        await db.workEntries.bulkAdd(data.workEntries);
+      }
     });
+
+    if (data.paymentLogs) {
+      savePaymentLogs(data.paymentLogs);
+    } else if (data.workEntries) {
+      // Migrate old workEntries structure if restoring an older backup format
+      const mappedLogs = data.workEntries.map((e: any) => ({
+        id: String(e.id || `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`),
+        employeeId: String(e.employeeId),
+        value: e.amountCents / 100,
+        date: e.dateIso || new Date(e.createdAt || Date.now()).toISOString().split('T')[0],
+        type: 'diaria',
+        note: e.note || '',
+        isPaid: e.isPaid ? 1 : 0,
+        createdAt: e.createdAt || Date.now()
+      }));
+      savePaymentLogs(mappedLogs);
+    }
+
     return true;
   } catch (error) {
     console.error('Failed to restore backup:', error);

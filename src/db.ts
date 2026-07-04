@@ -26,6 +26,8 @@ export interface Settings {
   theme: 'light' | 'dark';
   autoBackup: boolean;
   debtThresholdCents: number;
+  notificationsEnabled?: boolean;
+  notificationTime?: string;
 }
 
 export interface BackupEntry {
@@ -63,7 +65,9 @@ db.on('ready', async () => {
       highContrast: false,
       theme: 'light',
       autoBackup: false,
-      debtThresholdCents: 50000 // R$ 500,00
+      debtThresholdCents: 50000, // R$ 500,00
+      notificationsEnabled: false,
+      notificationTime: '18:00'
     });
   }
 });

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Employee } from '../db';
 import { useSettings } from '../contexts/SettingsContext';
@@ -6,6 +6,7 @@ import { useUndo } from '../contexts/UndoContext';
 import { Plus, Search, User, Phone, ChevronRight, Zap, UserCircle2, UserPlus, AlertTriangle, Pin, PinOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { formatCurrency } from '../lib/utils';
+import { usePaymentLogs, savePaymentLogs, getPaymentLogs } from '../lib/paymentDatabase';
 
 interface EmployeeListProps {
   onSelectEmployee: (id: number) => void;
@@ -34,56 +35,63 @@ export function EmployeeList({ onSelectEmployee }: EmployeeListProps) {
 
   const DEBT_THRESHOLD = settings?.debtThresholdCents || 50000; // R$ 500,00
 
-  const employees = useLiveQuery(
-    async () => {
-      const emps = await db.employees
-        .filter(e => e.name.toLowerCase().includes(searchTerm.toLowerCase()))
-        .toArray();
-      
-      const results = await Promise.all(emps.map(async (e) => {
-        const unpaid = await db.workEntries
-          .where('employeeId').equals(e.id!)
-          .filter(entry => !entry.isPaid)
-          .toArray();
-        const debt = unpaid.reduce((acc, entry) => acc + entry.amountCents, 0);
-        return { ...e, debt } as EmployeeWithDebt;
-      }));
-      
-      // Sort: Pinned first, then by name
-      return results.sort((a, b) => {
-        if (a.isPinned && !b.isPinned) return -1;
-        if (!a.isPinned && b.isPinned) return 1;
-        return a.name.localeCompare(b.name);
-      });
-    },
-    [searchTerm]
-  );
+  const [paymentLogs, setPaymentLogs] = usePaymentLogs();
+  const allEmps = useLiveQuery(() => db.employees.toArray(), []) || [];
 
-  const totalDebt = useLiveQuery(
-    async () => {
-      const unpaidEntries = await db.workEntries.where('isPaid').equals(0).toArray();
-      return unpaidEntries.reduce((acc, entry) => acc + entry.amountCents, 0);
-    },
-    []
-  );
+  const employees = useMemo(() => {
+    const debtMap = new Map<string, number>();
+    paymentLogs.forEach(log => {
+      if (!log.isPaid) {
+        debtMap.set(String(log.employeeId), (debtMap.get(String(log.employeeId)) || 0) + Math.round(log.value * 100));
+      }
+    });
+
+    const filtered = allEmps
+      .filter(e => e.name.toLowerCase().includes(searchTerm.toLowerCase()))
+      .map(emp => ({
+        ...emp,
+        debt: debtMap.get(String(emp.id)) || 0
+      }));
+
+    return filtered.sort((a, b) => {
+      if (a.isPinned && !b.isPinned) return -1;
+      if (!a.isPinned && b.isPinned) return 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [allEmps, paymentLogs, searchTerm]);
+
+  const totalDebt = useMemo(() => {
+    return paymentLogs
+      .filter(log => !log.isPaid)
+      .reduce((acc, log) => acc + Math.round(log.value * 100), 0);
+  }, [paymentLogs]);
 
   const handleQuickAdd = async (e: React.MouseEvent, employee: EmployeeWithDebt) => {
     e.stopPropagation();
     if (!employee.id) return;
 
-    const entryId = await db.workEntries.add({
-      employeeId: employee.id,
-      dateIso: new Date().toISOString().split('T')[0],
-      amountCents: employee.defaultAmountCents,
-      isPaid: 0,
+    const newId = `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const newLog = {
+      id: newId,
+      employeeId: String(employee.id),
+      value: employee.defaultAmountCents / 100,
+      date: new Date().toISOString().split('T')[0],
+      type: 'diaria',
       note: 'Lançamento Rápido',
+      isPaid: 0,
       createdAt: Date.now()
-    });
+    };
+
+    const updatedLogs = [...paymentLogs, newLog];
+    setPaymentLogs(updatedLogs);
+    savePaymentLogs(updatedLogs);
 
     showUndo({
       label: `Lançamento para ${employee.name}`,
-      onUndo: async () => {
-        await db.workEntries.delete(entryId as number);
+      onUndo: () => {
+        const currentLogs = getPaymentLogs();
+        const logsAfterUndo = currentLogs.filter(log => log.id !== newId);
+        savePaymentLogs(logsAfterUndo);
       }
     });
 

@@ -11,6 +11,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { db } from './db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { BACKUP_KEY, restoreBackup } from './lib/backup';
+import { migrateDexieToLocalStorage, getPaymentLogs, savePaymentLogs, migratePaidEntriesToPaymentLogs } from './lib/paymentDatabase';
 
 import { App as CapApp } from '@capacitor/app';
 
@@ -78,15 +79,51 @@ function AppContent() {
     window.history.back();
   };
 
+  // Trigger migration from Dexie to LocalStorage on startup
+  useEffect(() => {
+    async function doMigration() {
+      const didMigrate = localStorage.getItem('did_migrate_dexie_to_local_storage_v1');
+      if (!didMigrate) {
+        await migrateDexieToLocalStorage();
+        localStorage.setItem('did_migrate_dexie_to_local_storage_v1', 'true');
+      }
+      // Run the paid entries transaction logs migration
+      migratePaidEntriesToPaymentLogs();
+    }
+    doMigration();
+  }, []);
+
+  // One-time startup action to clear all team and payment records based on user command
+  useEffect(() => {
+    async function clearAllAppData() {
+      const alreadyCleared = localStorage.getItem('did_clear_data_to_clean_slate_v3');
+      if (!alreadyCleared) {
+        try {
+          await db.employees.clear();
+          await db.workEntries.clear();
+          await db.backups.clear();
+          savePaymentLogs([]);
+          localStorage.removeItem('caderneta_auto_backup');
+          localStorage.setItem('did_clear_data_to_clean_slate_v3', 'true');
+          window.dispatchEvent(new Event('payment-logs-updated'));
+        } catch (error) {
+          console.error('Error executing clean slate operation:', error);
+        }
+      }
+    }
+    clearAllAppData();
+  }, []);
+
   // Auto-backup logic
   const allData = useLiveQuery(async () => {
     const employees = await db.employees.toArray();
     const workEntries = await db.workEntries.toArray();
-    return { employees, workEntries };
+    const paymentLogs = getPaymentLogs();
+    return { employees, workEntries, paymentLogs };
   }, []);
 
   useEffect(() => {
-    if (allData && (allData.employees.length > 0 || allData.workEntries.length > 0)) {
+    if (allData && (allData.employees.length > 0 || allData.workEntries.length > 0 || allData.paymentLogs.length > 0)) {
       const timeout = setTimeout(() => {
         // Create backup in Dexie
         const backup = { ...allData, timestamp: Date.now() };

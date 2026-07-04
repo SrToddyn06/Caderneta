@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Settings } from '../db';
+import { scheduleDailyReminder } from '../lib/notifications';
 
 interface SettingsContextType {
   settings: Settings | undefined;
@@ -46,6 +47,13 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
 
       // Apply font size
       document.documentElement.setAttribute('data-font-size', settings.fontSize);
+
+      // Keep daily reminder scheduled if enabled
+      if (settings.notificationsEnabled) {
+        scheduleDailyReminder(settings.notificationTime || '18:00').catch(err => {
+          console.error('Error auto-scheduling reminder:', err);
+        });
+      }
     }
   }, [settings]);
 

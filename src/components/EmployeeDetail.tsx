@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type WorkEntry } from '../db';
+import { db } from '../db';
 import { useSettings } from '../contexts/SettingsContext';
 import { useUndo } from '../contexts/UndoContext';
 import { ArrowLeft, Trash2, CheckCircle2, Plus, Calendar as CalendarIcon, FileText, MoreVertical, MessageSquare, UserCog, ReceiptText, Copy, Share2, MessageCircle, Send, Pin, PinOff, Pencil } from 'lucide-react';
@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { formatCurrency } from '../lib/utils';
 import { format, parseISO, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { usePaymentLogs, savePaymentLogs, getPaymentLogs, type PaymentLog } from '../lib/paymentDatabase';
 
 interface EmployeeDetailProps {
   employeeId: number;
@@ -44,7 +45,7 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
   const [editPhone, setEditPhone] = useState('');
   const [editAmount, setEditAmount] = useState('');
 
-  const [editingEntry, setEditingEntry] = useState<WorkEntry | null>(null);
+  const [editingEntry, setEditingEntry] = useState<any | null>(null);
   const [editEntryAmount, setEditEntryAmount] = useState('');
   const [editEntryNote, setEditEntryNote] = useState('');
   const [editEntryDate, setEditEntryDate] = useState('');
@@ -64,15 +65,23 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
   }, []);
 
   const employee = useLiveQuery(() => db.employees.get(employeeId), [employeeId]);
-  const entries = useLiveQuery(
-    async () => {
-      const results = await db.workEntries.where('employeeId').equals(employeeId).toArray();
-      return results.sort((a, b) => b.dateIso.localeCompare(a.dateIso) || (b.id || 0) - (a.id || 0));
-    },
-    [employeeId]
-  );
+  
+  const [paymentLogs, setPaymentLogs] = usePaymentLogs();
 
-  const unpaidTotal = entries?.reduce((acc, entry) => acc + (entry.isPaid ? 0 : entry.amountCents), 0) || 0;
+  const entries = useMemo(() => {
+    return paymentLogs
+      .filter(e => String(e.employeeId) === String(employeeId))
+      .map(entry => ({
+        ...entry,
+        amountCents: Math.round(entry.value * 100),
+        dateIso: entry.date
+      }))
+      .sort((a, b) => b.dateIso.localeCompare(a.dateIso) || String(b.id).localeCompare(String(a.id)));
+  }, [paymentLogs, employeeId]);
+
+  const unpaidTotal = entries
+    ?.filter(entry => entry.type !== 'pagamento')
+    .reduce((acc, entry) => acc + (entry.isPaid ? 0 : entry.amountCents), 0) || 0;
 
   const handleTogglePin = async () => {
     if (!employee) return;
@@ -147,20 +156,28 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
     if (!entryAmount) return;
 
     const amount = Math.abs(parseFloat(entryAmount) || 0);
-
-    const entryId = await db.workEntries.add({
-      employeeId,
-      amountCents: Math.round(amount * 100),
-      dateIso: entryDate,
+    const newId = `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const newLog: PaymentLog = {
+      id: newId,
+      employeeId: String(employeeId),
+      value: amount,
+      date: entryDate,
+      type: 'diaria',
       note: entryNote,
       isPaid: 0,
       createdAt: Date.now()
-    });
+    };
+
+    const updatedLogs = [...paymentLogs, newLog];
+    setPaymentLogs(updatedLogs);
+    savePaymentLogs(updatedLogs);
 
     showUndo({
       label: 'Lançamento adicionado',
-      onUndo: async () => {
-        await db.workEntries.delete(entryId as number);
+      onUndo: () => {
+        const currentLogs = getPaymentLogs();
+        const logsAfterUndo = currentLogs.filter(log => log.id !== newId);
+        savePaymentLogs(logsAfterUndo);
       }
     });
 
@@ -169,7 +186,7 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
     setIsAddingEntry(false);
   };
 
-  const startEditingEntry = (entry: WorkEntry) => {
+  const startEditingEntry = (entry: any) => {
     setEditingEntry(entry);
     setEditEntryAmount((entry.amountCents / 100).toString());
     setEditEntryNote(entry.note);
@@ -180,20 +197,44 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
     e.preventDefault();
     if (!editingEntry?.id) return;
 
-    const previousData = { ...editingEntry };
+    const previousLogsState = [...paymentLogs];
     const amount = Math.abs(parseFloat(editEntryAmount) || 0);
-    const newData = {
-      amountCents: Math.round(amount * 100),
-      note: editEntryNote,
-      dateIso: editEntryDate
-    };
 
-    await db.workEntries.update(editingEntry.id, newData);
+    let updatedLogs = paymentLogs.map(log => {
+      if (String(log.id) === String(editingEntry.id)) {
+        return {
+          ...log,
+          value: amount,
+          note: editEntryNote,
+          date: editEntryDate
+        };
+      }
+      return log;
+    });
+
+    // If the edited entry is a paid work entry, check if its linked payment needs adjustment
+    const updatedEntry = updatedLogs.find(log => String(log.id) === String(editingEntry.id));
+    if (updatedEntry && updatedEntry.isPaid && updatedEntry.type !== 'pagamento' && updatedEntry.paymentId) {
+      // Check if it's an individual payment (or any payment that only pays this entry)
+      const otherPaidEntries = paymentLogs.filter(log => String(log.id) !== String(editingEntry.id) && log.paymentId && String(log.paymentId) === String(updatedEntry.paymentId));
+      if (otherPaidEntries.length === 0) {
+        // Safe to update the single linked payment's value to match the new entry's value
+        updatedLogs = updatedLogs.map(log => {
+          if (String(log.id) === String(updatedEntry.paymentId)) {
+            return { ...log, value: amount };
+          }
+          return log;
+        });
+      }
+    }
+
+    setPaymentLogs(updatedLogs);
+    savePaymentLogs(updatedLogs);
     
     showUndo({
       label: 'Lançamento atualizado',
-      onUndo: async () => {
-        await db.workEntries.update(editingEntry.id!, previousData);
+      onUndo: () => {
+        savePaymentLogs(previousLogsState);
       }
     });
 
@@ -202,20 +243,43 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
 
   const handleMarkAllPaid = async () => {
     const totalToPay = unpaidTotal;
-    const unpaidEntriesBefore = entries?.filter(e => !e.isPaid) || [];
+    const unpaidEntriesBefore = entries?.filter(e => !e.isPaid && e.type !== 'pagamento') || [];
     
     setConfirmModal({
       title: 'Marcar tudo como pago',
       message: `Deseja marcar todos os lançamentos pendentes (${formatCurrency(totalToPay)}) como pagos?`,
       type: 'success',
       onConfirm: async () => {
-        const entryIds = unpaidEntriesBefore.map(e => e.id).filter((id): id is number => id !== undefined);
-        await db.workEntries.where('id').anyOf(entryIds).modify({ isPaid: 1 });
+        const entryIds = unpaidEntriesBefore.map(e => String(e.id));
+        const previousLogsState = [...paymentLogs];
+
+        const paymentId = `pay-batch-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+        const batchPaymentLog: PaymentLog = {
+          id: paymentId,
+          employeeId: String(employeeId),
+          value: totalToPay / 100, // convert back from cents to Reais
+          date: format(new Date(), 'yyyy-MM-dd'), // payment date is today!
+          type: 'pagamento',
+          note: 'Pagamento total de débitos',
+          isPaid: 1,
+          createdAt: Date.now()
+        };
+
+        const updatedLogs = paymentLogs.map(log => {
+          if (entryIds.includes(String(log.id))) {
+            return { ...log, isPaid: 1, paymentId };
+          }
+          return log;
+        });
+        updatedLogs.push(batchPaymentLog);
+
+        setPaymentLogs(updatedLogs);
+        savePaymentLogs(updatedLogs);
         
         showUndo({
           label: 'Pagamento total realizado',
-          onUndo: async () => {
-            await db.workEntries.where('id').anyOf(entryIds).modify({ isPaid: 0 });
+          onUndo: () => {
+            savePaymentLogs(previousLogsState);
           }
         });
 
@@ -248,53 +312,80 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
     const originalAmount = amountToAbate;
     if (isNaN(amountToAbate) || amountToAbate <= 0) return;
 
-    const unpaidEntries = await db.workEntries
-      .where('employeeId')
-      .equals(employeeId)
-      .filter(e => !e.isPaid)
-      .sortBy('dateIso');
+    const unpaidEntriesList = entries
+      .filter(e => !e.isPaid && e.type !== 'pagamento')
+      .sort((a, b) => a.dateIso.localeCompare(b.dateIso));
 
-    const previousEntries = await db.workEntries.where('employeeId').equals(employeeId).toArray();
-    const newEntriesCreated: number[] = [];
+    const previousLogsState = [...paymentLogs];
+    let currentLogs = [...paymentLogs];
+    let remainingToAbateCents = amountToAbate;
 
-    await db.transaction('rw', [db.workEntries], async () => {
-      for (const entry of unpaidEntries) {
-        if (amountToAbate <= 0) break;
-        if (!entry.id) continue;
+    const paymentId = `pay-partial-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const partialPaymentLog: PaymentLog = {
+      id: paymentId,
+      employeeId: String(employeeId),
+      value: originalAmount / 100, // convert back from cents to Reais
+      date: format(new Date(), 'yyyy-MM-dd'), // payment date is today!
+      type: 'pagamento',
+      note: 'Pagamento Parcial',
+      isPaid: 1,
+      createdAt: Date.now()
+    };
 
-        if (amountToAbate >= entry.amountCents) {
-          amountToAbate -= entry.amountCents;
-          await db.workEntries.update(entry.id, { isPaid: 1 });
-        } else {
-          const remaining = entry.amountCents - amountToAbate;
-          await db.workEntries.update(entry.id, { amountCents: amountToAbate, isPaid: 1 });
-          const newId = await db.workEntries.add({
-            employeeId,
-            amountCents: remaining,
-            dateIso: entry.dateIso,
-            note: `${entry.note} (Restante de pagamento parcial)`,
-            isPaid: 0,
-            createdAt: Date.now()
-          });
-          newEntriesCreated.push(newId as number);
-          amountToAbate = 0;
-        }
+    for (const entry of unpaidEntriesList) {
+      if (remainingToAbateCents <= 0) break;
+
+      const logIndex = currentLogs.findIndex(l => String(l.id) === String(entry.id));
+      if (logIndex === -1) continue;
+
+      const log = currentLogs[logIndex];
+      const entryAmountCents = Math.round(log.value * 100);
+
+      if (remainingToAbateCents >= entryAmountCents) {
+        remainingToAbateCents -= entryAmountCents;
+        currentLogs[logIndex] = { 
+          ...log, 
+          isPaid: 1, 
+          paymentId,
+          originalValue: log.originalValue ?? log.value
+        };
+      } else {
+        const remainingCents = entryAmountCents - remainingToAbateCents;
+        const origVal = log.originalValue ?? log.value;
+
+        currentLogs[logIndex] = { 
+          ...log, 
+          value: remainingToAbateCents / 100, 
+          isPaid: 1,
+          paymentId,
+          originalValue: origVal
+        };
+        const newLog: PaymentLog = {
+          id: `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          employeeId: log.employeeId,
+          value: remainingCents / 100,
+          date: log.date,
+          type: log.type,
+          note: log.note ? `${log.note} (Restante de pagamento parcial)` : 'Restante de pagamento parcial',
+          isPaid: 0,
+          createdAt: Date.now(),
+          originalValue: origVal,
+          splitFromId: log.id
+        };
+        currentLogs.push(newLog);
+        remainingToAbateCents = 0;
       }
-    });
+    }
+
+    currentLogs.push(partialPaymentLog);
+
+    setPaymentLogs(currentLogs);
+    savePaymentLogs(currentLogs);
 
     showUndo({
       label: 'Pagamento parcial realizado',
-      onUndo: async () => {
-        // Restore previous state
-        for (const oldEntry of previousEntries) {
-          if (oldEntry.id) {
-            await db.workEntries.put(oldEntry);
-          }
-        }
-        // Delete any new entries created by the partial payment
-        if (newEntriesCreated.length > 0) {
-          await db.workEntries.bulkDelete(newEntriesCreated);
-        }
+      onUndo: () => {
+        savePaymentLogs(previousLogsState);
       }
     });
 
@@ -312,26 +403,24 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
   const handleDeleteEmployee = async () => {
     if (!employee) return;
     const employeeData = { ...employee };
-    const employeeEntries = entries ? [...entries] : [];
+    const previousLogsState = [...paymentLogs];
 
     setConfirmModal({
       title: 'Excluir Funcionário',
       message: 'Tem certeza que deseja excluir este funcionário e todos os seus registros?',
       type: 'danger',
       onConfirm: async () => {
-        await db.transaction('rw', [db.workEntries, db.employees], async () => {
-          await db.workEntries.where('employeeId').equals(employeeId).delete();
-          await db.employees.delete(employeeId);
-        });
+        const filteredLogs = paymentLogs.filter(log => String(log.employeeId) !== String(employeeId));
+        setPaymentLogs(filteredLogs);
+        savePaymentLogs(filteredLogs);
+
+        await db.employees.delete(employeeId);
         
         showUndo({
           label: `Funcionário ${employeeData.name} excluído`,
           onUndo: async () => {
-            const newId = await db.employees.add(employeeData);
-            if (employeeEntries.length > 0) {
-              const entriesToRestore = employeeEntries.map(e => ({ ...e, employeeId: newId as number }));
-              await db.workEntries.bulkAdd(entriesToRestore);
-            }
+            await db.employees.add(employeeData);
+            savePaymentLogs(previousLogsState);
           }
         });
 
@@ -341,21 +430,83 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
     });
   };
 
-  const togglePaid = async (entry: WorkEntry) => {
+  const togglePaid = async (entry: any) => {
     if (!entry.id) return;
+    const previousLogsState = [...paymentLogs];
     const previousState = entry.isPaid;
-    await db.workEntries.update(entry.id, { isPaid: previousState ? 0 : 1 });
+    const paymentId = `pay-ind-${entry.id}`;
+
+    let updatedLogs: PaymentLog[] = [];
+
+    if (!previousState) {
+      // Toggle to PAID: set isPaid to 1, assign paymentId, and create a 'pagamento' log on today's date
+      const paymentLogEntry: PaymentLog = {
+        id: paymentId,
+        employeeId: String(employeeId),
+        value: entry.value,
+        date: format(new Date(), 'yyyy-MM-dd'), // payment happened today!
+        type: 'pagamento',
+        note: entry.note ? `Pagamento de: ${entry.note}` : 'Pagamento de diária',
+        isPaid: 1,
+        createdAt: Date.now()
+      };
+
+      updatedLogs = paymentLogs.map(log => {
+        if (String(log.id) === String(entry.id)) {
+          return { ...log, isPaid: 1, paymentId };
+        }
+        return log;
+      });
+      updatedLogs.push(paymentLogEntry);
+    } else {
+      // Toggle to UNPAID: set isPaid to 0, clear paymentId, and handle split/batch payments gracefully
+      const targetPaymentId = entry.paymentId || paymentId;
+      const linkedPayment = paymentLogs.find(log => log.type === 'pagamento' && String(log.id) === String(targetPaymentId));
+      const otherPaidEntries = paymentLogs.filter(log => String(log.id) !== String(entry.id) && log.paymentId && String(log.paymentId) === String(targetPaymentId));
+
+      let tempLogs = [...paymentLogs];
+      if (linkedPayment) {
+        if (otherPaidEntries.length === 0) {
+          // Only paid this entry, safely delete the payment record
+          tempLogs = tempLogs.filter(log => String(log.id) !== String(linkedPayment.id));
+        } else {
+          // Paid multiple entries, reduce the payment's value by the entry's value
+          tempLogs = tempLogs.map(log => {
+            if (String(log.id) === String(linkedPayment.id)) {
+              const newValue = Math.max(0, log.value - entry.value);
+              return { ...log, value: newValue };
+            }
+            return log;
+          }).filter(log => String(log.id) !== String(linkedPayment.id) || log.value > 0);
+        }
+      }
+
+      // Update the entry itself to be unpaid and restore original split value if it was a partial payment
+      updatedLogs = tempLogs.map(log => {
+        if (String(log.id) === String(entry.id)) {
+          const restoredValue = log.originalValue ?? log.value;
+          return { ...log, isPaid: 0, paymentId: undefined, value: restoredValue };
+        }
+        return log;
+      });
+
+      // Remove any split-off remaining unpaid logs that were created from this original partial payment split
+      updatedLogs = updatedLogs.filter(log => !log.splitFromId || String(log.splitFromId) !== String(entry.id));
+    }
+
+    setPaymentLogs(updatedLogs);
+    savePaymentLogs(updatedLogs);
     
     showUndo({
       label: previousState ? 'Lançamento marcado como pendente' : 'Lançamento marcado como pago',
-      onUndo: async () => {
-        await db.workEntries.update(entry.id!, { isPaid: previousState });
+      onUndo: () => {
+        savePaymentLogs(previousLogsState);
       }
     });
   };
 
-  const deleteEntry = async (id: number) => {
-    const entryToDelete = await db.workEntries.get(id);
+  const deleteEntry = async (id: any) => {
+    const entryToDelete = paymentLogs.find(l => String(l.id) === String(id));
     if (!entryToDelete) return;
 
     setConfirmModal({
@@ -363,12 +514,59 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
       message: 'Deseja excluir este lançamento?',
       type: 'danger',
       onConfirm: async () => {
-        await db.workEntries.delete(id);
+        const previousLogsState = [...paymentLogs];
+        let updatedLogs = paymentLogs.filter(log => String(log.id) !== String(id));
+
+        // If the deleted entry is a payment ('pagamento'), find any work entries paid by it,
+        // mark them as unpaid, and clean up/restore any split logs.
+        if (entryToDelete.type === 'pagamento') {
+          const paidEntryIds: string[] = [];
+          
+          updatedLogs = updatedLogs.map(log => {
+            if (log.paymentId && String(log.paymentId) === String(id)) {
+              paidEntryIds.push(String(log.id));
+              const restoredValue = log.originalValue ?? log.value;
+              return { ...log, isPaid: 0, paymentId: undefined, value: restoredValue };
+            }
+            return log;
+          });
+
+          // Delete any split-off remaining unpaid logs associated with those restored work entries
+          updatedLogs = updatedLogs.filter(log => !log.splitFromId || !paidEntryIds.includes(String(log.splitFromId)));
+        } 
+        // If the deleted entry is a regular work entry that is paid, adjust/delete the linked payment
+        else if (entryToDelete.isPaid === 1) {
+          const targetPaymentId = entryToDelete.paymentId;
+          const linkedPayment = updatedLogs.find(log => log.type === 'pagamento' && String(log.id) === String(targetPaymentId));
+          const otherPaidEntries = updatedLogs.filter(log => log.paymentId && String(log.paymentId) === String(targetPaymentId));
+
+          if (linkedPayment) {
+            if (otherPaidEntries.length === 0) {
+              // Delete the payment completely if no other entry is paid by it
+              updatedLogs = updatedLogs.filter(log => String(log.id) !== String(linkedPayment.id));
+            } else {
+              // Reduce payment's value by the deleted entry's value
+              updatedLogs = updatedLogs.map(log => {
+                if (String(log.id) === String(linkedPayment.id)) {
+                  const newValue = Math.max(0, log.value - entryToDelete.value);
+                  return { ...log, value: newValue };
+                }
+                return log;
+              }).filter(log => String(log.id) !== String(linkedPayment.id) || log.value > 0);
+            }
+          }
+
+          // Clean up any split-off remaining unpaid logs associated with this deleted entry
+          updatedLogs = updatedLogs.filter(log => !log.splitFromId || String(log.splitFromId) !== String(entryToDelete.id));
+        }
+
+        setPaymentLogs(updatedLogs);
+        savePaymentLogs(updatedLogs);
         
         showUndo({
           label: 'Lançamento excluído',
-          onUndo: async () => {
-            await db.workEntries.add(entryToDelete);
+          onUndo: () => {
+            savePaymentLogs(previousLogsState);
           }
         });
 
@@ -486,71 +684,99 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
         </div>
 
         <div className="space-y-3">
-          {entries?.map((entry) => (
-            <motion.div
-              key={entry.id}
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              className={`p-4 rounded-2xl border flex items-center justify-between transition-all ${
-                entry.isPaid 
-                  ? 'bg-slate-100 dark:bg-slate-900/50 border-transparent opacity-60' 
-                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-sm'
-              }`}
-            >
-              <div className="flex items-center gap-4">
-                <button 
-                  onClick={() => togglePaid(entry)}
-                  className={`w-8 h-8 rounded-full flex items-center justify-center border-2 transition-all ${
-                    entry.isPaid 
-                      ? 'bg-emerald-500 border-emerald-500 text-white' 
-                      : 'border-slate-300 dark:border-slate-700'
-                  }`}
-                >
-                  {entry.isPaid && <CheckCircle2 className="w-5 h-5" />}
-                </button>
-                <div>
-                  <p className="font-bold text-lg">{formatCurrency(entry.amountCents)}</p>
-                  <p className="text-sm text-slate-500 flex items-center gap-1">
-                    <CalendarIcon className="w-3 h-3" /> {format(parseISO(entry.dateIso), 'dd/MM/yyyy')}
-                  </p>
-                  {entry.note && (
-                    <p className="text-sm text-slate-400 italic flex items-center gap-1 mt-1">
-                      <FileText className="w-3 h-3" /> {entry.note}
-                    </p>
+          {entries?.map((entry) => {
+            const isPayment = entry.type === 'pagamento';
+            
+            return (
+              <motion.div
+                key={entry.id}
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                className={`p-4 rounded-2xl border flex items-center justify-between transition-all ${
+                  isPayment
+                    ? 'bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-100 dark:border-emerald-900/30'
+                    : entry.isPaid 
+                      ? 'bg-slate-100 dark:bg-slate-900/50 border-transparent opacity-60' 
+                      : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-sm'
+                }`}
+              >
+                <div className="flex items-center gap-4">
+                  {isPayment ? (
+                    <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center shrink-0">
+                      <ReceiptText className="w-4 h-4" />
+                    </div>
+                  ) : (
+                    <button 
+                      onClick={() => togglePaid(entry)}
+                      className={`w-8 h-8 rounded-full flex items-center justify-center border-2 transition-all shrink-0 ${
+                        entry.isPaid 
+                          ? 'bg-emerald-500 border-emerald-500 text-white' 
+                          : 'border-slate-300 dark:border-slate-700'
+                      }`}
+                    >
+                      {entry.isPaid && <CheckCircle2 className="w-5 h-5" />}
+                    </button>
                   )}
+                  <div>
+                    <div className="flex items-baseline gap-2 flex-wrap">
+                      <p className={`font-bold text-lg ${isPayment ? 'text-emerald-600 dark:text-emerald-400' : ''}`}>
+                        {isPayment ? '+' : ''}{formatCurrency(entry.amountCents)}
+                      </p>
+                      {entry.originalValue && Math.round(entry.originalValue * 100) !== entry.amountCents && (
+                        <span className="text-xs text-slate-400 font-medium">
+                          (Original: {formatCurrency(Math.round(entry.originalValue * 100))})
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm text-slate-500 flex items-center gap-1">
+                      <CalendarIcon className="w-3 h-3" /> {format(parseISO(entry.dateIso), 'dd/MM/yyyy')}
+                      {isPayment && (
+                        <span className="text-[10px] font-black text-emerald-700 dark:text-emerald-300 ml-1 bg-emerald-100 dark:bg-emerald-900/40 px-1.5 py-0.5 rounded-md uppercase tracking-wider">
+                          PAGAMENTO
+                        </span>
+                      )}
+                    </p>
+                    {entry.note && (
+                      <p className="text-sm text-slate-400 italic flex items-center gap-1 mt-1">
+                        <FileText className="w-3 h-3" /> {entry.note}
+                      </p>
+                    )}
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-1">
-                <button 
-                  onClick={() => startEditingEntry(entry)}
-                  className="p-2 text-slate-400 hover:text-emerald-500 transition-colors"
-                  title="Editar Lançamento"
-                >
-                  <Pencil className="w-4 h-4" />
-                </button>
-                {entry.isPaid === 1 && (
+                <div className="flex items-center gap-1">
+                  {!isPayment && (
+                    <button 
+                      onClick={() => startEditingEntry(entry)}
+                      className="p-2 text-slate-400 hover:text-emerald-500 transition-colors"
+                      title="Editar Lançamento"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                  )}
+                  {(entry.isPaid === 1 || isPayment) && (
+                    <button 
+                      onClick={() => setReceiptModal({
+                        employeeName: employee.name,
+                        amount: entry.amountCents,
+                        date: entry.dateIso,
+                        note: entry.note
+                      })}
+                      className="p-2 text-emerald-500 hover:text-emerald-600 transition-colors"
+                      title="Gerar Recibo"
+                    >
+                      <ReceiptText className="w-5 h-5" />
+                    </button>
+                  )}
                   <button 
-                    onClick={() => setReceiptModal({
-                      employeeName: employee.name,
-                      amount: entry.amountCents,
-                      date: entry.dateIso,
-                      note: entry.note
-                    })}
-                    className="p-2 text-emerald-500 hover:text-emerald-600 transition-colors"
-                    title="Gerar Recibo"
+                    onClick={() => entry.id && deleteEntry(entry.id)}
+                    className="p-2 text-slate-300 hover:text-red-500 transition-colors"
                   >
-                    <ReceiptText className="w-5 h-5" />
+                    <Trash2 className="w-5 h-5" />
                   </button>
-                )}
-                <button 
-                  onClick={() => entry.id && deleteEntry(entry.id)}
-                  className="p-2 text-slate-300 hover:text-red-500 transition-colors"
-                >
-                  <Trash2 className="w-5 h-5" />
-                </button>
-              </div>
-            </motion.div>
-          ))}
+                </div>
+              </motion.div>
+            );
+          })}
           
           {entries?.length === 0 && (
             <div className="text-center py-12 text-slate-400">

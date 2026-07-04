@@ -1,12 +1,13 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
-import { format, startOfMonth, endOfMonth, eachDayOfInterval, subMonths, isSameDay, parseISO, startOfYesterday } from 'date-fns';
+import { format, startOfMonth, endOfMonth, eachDayOfInterval, subMonths } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { TrendingUp, Users, Wallet, Calendar, ArrowUpRight, ArrowDownRight, Award } from 'lucide-react';
+import { TrendingUp, Users, Wallet, Calendar, ArrowUpRight, ArrowDownRight, Award, History } from 'lucide-react';
 import { formatCurrency } from '../lib/utils';
 import { motion } from 'motion/react';
+import { usePaymentLogs } from '../lib/paymentDatabase';
 
 export function StatsView() {
   const now = new Date();
@@ -15,83 +16,112 @@ export function StatsView() {
   const lastMonthStart = startOfMonth(subMonths(now, 1));
   const lastMonthEnd = endOfMonth(subMonths(now, 1));
 
-  const stats = useLiveQuery(
-    async () => {
-      // Use indexed queries for better performance with large datasets
-      const currentMonthStr = {
-        start: format(currentMonthStart, 'yyyy-MM-dd'),
-        end: format(currentMonthEnd, 'yyyy-MM-dd')
-      };
-      const lastMonthStr = {
-        start: format(lastMonthStart, 'yyyy-MM-dd'),
-        end: format(lastMonthEnd, 'yyyy-MM-dd')
-      };
+  const [paymentLogs] = usePaymentLogs();
+  const allEmployees = useLiveQuery(() => db.employees.toArray(), []) || [];
 
-      const [currentMonthEntries, lastMonthEntries, allEmployees] = await Promise.all([
-        db.workEntries.where('dateIso').between(currentMonthStr.start, currentMonthStr.end, true, true).toArray(),
-        db.workEntries.where('dateIso').between(lastMonthStr.start, lastMonthStr.end, true, true).toArray(),
-        db.employees.toArray()
-      ]);
+  // 3. Hook/memoização de cálculo dinâmico agrupado por mês/ano para gerar o histórico real
+  const monthlyPaymentHistory = useMemo(() => {
+    const historyMap: { [key: string]: { date: Date; totalPaid: number; transactionCount: number } } = {};
 
-      const currentTotal = currentMonthEntries.filter(e => e.isPaid).reduce((acc, e) => acc + e.amountCents, 0);
-      const lastTotal = lastMonthEntries.filter(e => e.isPaid).reduce((acc, e) => acc + e.amountCents, 0);
-      
-      let growth = 0;
-      if (lastTotal > 0) {
-        growth = ((currentTotal - lastTotal) / lastTotal) * 100;
-      } else if (currentTotal > 0) {
-        growth = 100;
-      }
-      
-      // Group by day for the chart
-      const daysInMonth = eachDayOfInterval({ start: currentMonthStart, end: currentMonthEnd });
-      const chartData = daysInMonth.map(day => {
-        const dateStr = format(day, 'yyyy-MM-dd');
-        const dayTotal = currentMonthEntries
-          .filter(e => e.dateIso === dateStr && e.isPaid)
-          .reduce((acc, e) => acc + e.amountCents, 0);
+    paymentLogs.filter(log => log.type === 'pagamento').forEach(log => {
+      try {
+        // Converte e obtém o ano e mês do lançamento (ex: "2026-06")
+        const d = new Date(log.date);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
         
-        return {
-          day: format(day, 'dd'),
-          amount: dayTotal / 100,
-          fullDate: dateStr
-        };
-      }).filter(d => d.amount > 0 || parseInt(d.day) % 5 === 0);
+        if (!historyMap[key]) {
+          // Inicializa o mês caso não exista no histórico
+          historyMap[key] = { 
+            date: new Date(d.getFullYear(), d.getMonth(), 1), 
+            totalPaid: 0, 
+            transactionCount: 0 
+          };
+        }
+        
+        historyMap[key].totalPaid += Number(log.value) || 0;
+        historyMap[key].transactionCount += 1;
+      } catch (error) {
+        console.error("Erro ao processar data do log:", error);
+      }
+    });
 
-      // Top employees (Current Month)
-      const employeeStats = allEmployees.map(emp => {
-        const empEntries = currentMonthEntries.filter(e => e.employeeId === emp.id && e.isPaid);
-        const total = empEntries.reduce((acc, e) => acc + e.amountCents, 0);
-        return { name: emp.name, total, count: empEntries.length };
-      }).filter(e => e.total > 0).sort((a, b) => b.total - a.total).slice(0, 5);
+    // Transforma em uma lista ordenada do mês mais recente para o mais antigo
+    return Object.values(historyMap).sort((a, b) => b.date.getTime() - a.date.getTime());
+  }, [paymentLogs]);
 
-      // Top Debtors (All Time)
-      // Optimization: Fetch all unpaid once and group in memory to avoid N database calls
-      const allUnpaid = await db.workEntries.where('isPaid').equals(0).toArray();
-      const debtMap = new Map<number, number>();
-      allUnpaid.forEach(entry => {
-        debtMap.set(entry.employeeId, (debtMap.get(entry.employeeId) || 0) + entry.amountCents);
-      });
+  // Calculations derived purely from the real-time LocalStorage paymentLogs
+  const stats = useMemo(() => {
+    if (!paymentLogs) return null;
 
-      const topDebtors = allEmployees
-        .map(emp => ({ name: emp.name, total: debtMap.get(emp.id!) || 0 }))
-        .filter(e => e.total > 0)
-        .sort((a, b) => b.total - a.total)
-        .slice(0, 5);
+    const currentMonthStr = {
+      start: format(currentMonthStart, 'yyyy-MM-dd'),
+      end: format(currentMonthEnd, 'yyyy-MM-dd')
+    };
+    const lastMonthStr = {
+      start: format(lastMonthStart, 'yyyy-MM-dd'),
+      end: format(lastMonthEnd, 'yyyy-MM-dd')
+    };
 
+    const currentMonthEntries = paymentLogs.filter(e => e.date >= currentMonthStr.start && e.date <= currentMonthStr.end);
+    const lastMonthEntries = paymentLogs.filter(e => e.date >= lastMonthStr.start && e.date <= lastMonthStr.end);
+
+    const currentTotal = currentMonthEntries.filter(e => e.type === 'pagamento').reduce((acc, e) => acc + Math.round(e.value * 100), 0);
+    const lastTotal = lastMonthEntries.filter(e => e.type === 'pagamento').reduce((acc, e) => acc + Math.round(e.value * 100), 0);
+    
+    let growth = 0;
+    if (lastTotal > 0) {
+      growth = ((currentTotal - lastTotal) / lastTotal) * 100;
+    } else if (currentTotal > 0) {
+      growth = 100;
+    }
+    
+    // Group by day for the chart
+    const daysInMonth = eachDayOfInterval({ start: currentMonthStart, end: currentMonthEnd });
+    const chartData = daysInMonth.map(day => {
+      const dateStr = format(day, 'yyyy-MM-dd');
+      const dayTotal = currentMonthEntries
+        .filter(e => e.date === dateStr && e.type === 'pagamento')
+        .reduce((acc, e) => acc + Math.round(e.value * 100), 0);
+      
       return {
-        currentTotal,
-        lastTotal,
-        growth,
-        chartData,
-        employeeStats,
-        topDebtors,
-        activeEmployees: allEmployees.length,
-        totalEntries: currentMonthEntries.length
+        day: format(day, 'dd'),
+        amount: dayTotal / 100,
+        fullDate: dateStr
       };
-    },
-    []
-  );
+    }).filter(d => d.amount > 0 || parseInt(d.day) % 5 === 0);
+
+    // Top employees (Current Month Paid Amount)
+    const employeeStats = allEmployees.map(emp => {
+      const empEntries = currentMonthEntries.filter(e => e.employeeId === String(emp.id) && e.type === 'pagamento');
+      const total = empEntries.reduce((acc, e) => acc + Math.round(e.value * 100), 0);
+      return { name: emp.name, total, count: empEntries.length };
+    }).filter(e => e.total > 0).sort((a, b) => b.total - a.total).slice(0, 5);
+
+    // Top Debtors (All Time Unpaid)
+    const debtMap = new Map<string, number>();
+    paymentLogs.forEach(entry => {
+      if (!entry.isPaid && entry.type !== 'pagamento') {
+        debtMap.set(String(entry.employeeId), (debtMap.get(String(entry.employeeId)) || 0) + Math.round(entry.value * 100));
+      }
+    });
+
+    const topDebtors = allEmployees
+      .map(emp => ({ name: emp.name, total: debtMap.get(String(emp.id)) || 0 }))
+      .filter(e => e.total > 0)
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 5);
+
+    return {
+      currentTotal,
+      lastTotal,
+      growth,
+      chartData,
+      employeeStats,
+      topDebtors,
+      activeEmployees: allEmployees.length,
+      totalEntries: currentMonthEntries.length
+    };
+  }, [paymentLogs, allEmployees, currentMonthStart, currentMonthEnd, lastMonthStart, lastMonthEnd]);
 
   if (!stats) return null;
 
@@ -112,7 +142,6 @@ export function StatsView() {
       "Dica: Utilize a agenda para prever seus ganhos das próximas semanas."
     ];
     
-    // Simple pseudo-random based on current month/total to avoid rotation on every click
     const tipIndex = (now.getMonth() + Math.floor(stats.currentTotal / 100)) % tips.length;
     return tips[tipIndex];
   };
@@ -122,7 +151,7 @@ export function StatsView() {
   return (
     <div className="p-4 safe-top space-y-6 pb-32 flex flex-col">
       <header>
-        <h1 className="text-3xl font-black tracking-tight">Estatísticas</h1>
+        <h1 className="text-3xl font-black tracking-tight font-sans text-gray-900 dark:text-white">Estatísticas</h1>
       </header>
 
       <div className="grid grid-cols-2 gap-3">
@@ -169,7 +198,7 @@ export function StatsView() {
         </div>
       </div>
 
-      <section className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm">
+      <section className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm col-span-2">
         <h2 className="text-sm font-black text-slate-500 uppercase tracking-widest mb-6 flex items-center gap-2">
           <Wallet className="w-4 h-4" /> Faturamento Diário
         </h2>
@@ -212,6 +241,27 @@ export function StatsView() {
               </Bar>
             </BarChart>
           </ResponsiveContainer>
+        </div>
+      </section>
+
+      {/* Real-time calculated monthly history as requested */}
+      <section className="space-y-3">
+        <h2 className="text-sm font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
+          <History className="w-4 h-4 text-emerald-500" /> Histórico por Mês/Ano
+        </h2>
+        <div className="space-y-2">
+          {monthlyPaymentHistory.map((item, i) => (
+            <div key={i} className="flex items-center justify-between p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800">
+              <div>
+                <p className="font-bold capitalize">{format(item.date, 'MMMM yyyy', { locale: ptBR })}</p>
+                <p className="text-[10px] text-slate-500 font-bold uppercase">{item.transactionCount} lançamentos</p>
+              </div>
+              <p className="font-black text-emerald-600">{formatCurrency(Math.round(item.totalPaid * 100))}</p>
+            </div>
+          ))}
+          {monthlyPaymentHistory.length === 0 && (
+            <p className="text-center py-4 text-xs text-slate-400 font-bold italic">Sem histórico registrado.</p>
+          )}
         </div>
       </section>
 
