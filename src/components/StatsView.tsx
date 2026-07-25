@@ -25,14 +25,20 @@ export function StatsView() {
 
     paymentLogs.filter(log => log.type === 'pagamento').forEach(log => {
       try {
-        // Converte e obtém o ano e mês do lançamento (ex: "2026-06")
-        const d = new Date(log.date);
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        if (!log.date) return;
+        // Parse YYYY-MM-DD directly without UTC conversion shift
+        const parts = log.date.split('-');
+        if (parts.length < 2) return;
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10);
+        if (isNaN(year) || isNaN(month)) return;
+
+        const key = `${year}-${String(month).padStart(2, '0')}`;
         
         if (!historyMap[key]) {
-          // Inicializa o mês caso não exista no histórico
+          // Initialize month in local time
           historyMap[key] = { 
-            date: new Date(d.getFullYear(), d.getMonth(), 1), 
+            date: new Date(year, month - 1, 1), 
             totalPaid: 0, 
             transactionCount: 0 
           };

@@ -13,6 +13,7 @@ export interface PaymentLog {
   originalValue?: number; // the original value before any split/partial payments
   paymentId?: string | number; // references the 'pagamento' type entry that paid this
   splitFromId?: string | number; // the id of the original log this was split from
+  referenceMonth?: string; // YYYY-MM format, e.g., '2026-07'
 }
 
 const LOCAL_STORAGE_KEY = 'payment_logs';

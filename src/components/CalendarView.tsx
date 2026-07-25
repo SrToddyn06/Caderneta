@@ -69,7 +69,7 @@ export function CalendarView() {
     
     if (dayEntries.length === 0) return null;
     
-    const hasUnpaid = dayEntries.some(e => !e.isPaid);
+    const hasUnpaid = dayEntries.some(e => !e.isPaid && e.type !== 'pagamento');
     return hasUnpaid ? 'unpaid' : 'paid';
   };
 

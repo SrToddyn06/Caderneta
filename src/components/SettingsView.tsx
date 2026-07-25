@@ -56,21 +56,24 @@ export function SettingsView() {
     const employees = await db.employees.toArray();
     const entries = getPaymentLogs();
 
-    let csv = 'Tipo,ID,Nome/EmployeeID,Telefone/Data,Valor,Nota,Pago\n';
+    let csv = 'Tipo,ID,Nome/EmployeeID,Telefone/Data,Valor (R$),Nota,Pago\n';
     
     employees.forEach(e => {
-      csv += `Funcionario,${e.id},"${e.name.replace(/"/g, '""')}",${e.phone},${e.defaultAmountCents},,\n`;
+      const val = (e.defaultAmountCents / 100).toFixed(2);
+      csv += `Funcionario,${e.id},"${e.name.replace(/"/g, '""')}",${e.phone || ''},${val},,\n`;
     });
 
     entries.forEach(e => {
-      csv += `Lancamento,${e.id},${e.employeeId},${e.date},${e.value * 100},"${(e.note || '').replace(/"/g, '""')}",${e.isPaid}\n`;
+      const val = (Number(e.value) || 0).toFixed(2);
+      csv += `Lancamento,${e.id},${e.employeeId},${e.date},${val},"${(e.note || '').replace(/"/g, '""')}",${e.isPaid ? 'SIM' : 'NAO'}\n`;
     });
 
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `caderneta_backup_${new Date().toISOString().split('T')[0]}.csv`;
+    link.download = `caderneta_export_${new Date().toISOString().split('T')[0]}.csv`;
     link.click();
+    URL.revokeObjectURL(link.href);
   };
 
   const handleExportJSON = async () => {

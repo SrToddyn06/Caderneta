@@ -3,10 +3,10 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import { useSettings } from '../contexts/SettingsContext';
 import { useUndo } from '../contexts/UndoContext';
-import { ArrowLeft, Trash2, CheckCircle2, Plus, Calendar as CalendarIcon, FileText, MoreVertical, MessageSquare, UserCog, ReceiptText, Copy, Share2, MessageCircle, Send, Pin, PinOff, Pencil } from 'lucide-react';
+import { ArrowLeft, Trash2, CheckCircle2, Plus, Calendar as CalendarIcon, FileText, MoreVertical, MessageSquare, UserCog, ReceiptText, Copy, Share2, MessageCircle, Send, Pin, PinOff, Pencil, ChevronDown, ChevronUp, History, Award, CalendarDays } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { formatCurrency } from '../lib/utils';
-import { format, parseISO, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay } from 'date-fns';
+import { format, parseISO, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, subMonths } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { usePaymentLogs, savePaymentLogs, getPaymentLogs, type PaymentLog } from '../lib/paymentDatabase';
 
@@ -17,6 +17,9 @@ interface EmployeeDetailProps {
 
 export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
   const { showUndo } = useUndo();
+  const [activeSubTab, setActiveSubTab] = useState<'lancamentos' | 'historico_mensal'>('lancamentos');
+  const [selectedHistoryYear, setSelectedHistoryYear] = useState<string>(format(new Date(), 'yyyy'));
+
   const [isAddingEntry, setIsAddingEntry] = useState(false);
   const [entryAmount, setEntryAmount] = useState('');
   const [entryNote, setEntryNote] = useState('');
@@ -32,6 +35,27 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
 
   const [partialPaymentModal, setPartialPaymentModal] = useState(false);
   const [partialAmount, setPartialAmount] = useState('');
+  const [partialPaymentMonth, setPartialPaymentMonth] = useState<string>(format(new Date(), 'yyyy-MM'));
+
+  // Month Prompt Modal for Payments
+  const [paymentMonthModal, setPaymentMonthModal] = useState<{
+    title: string;
+    message: string;
+    amountText: string;
+    defaultMonth: string;
+    onConfirm: (month: string) => void;
+  } | null>(null);
+  const [selectedModalMonth, setSelectedModalMonth] = useState<string>(format(new Date(), 'yyyy-MM'));
+
+  // Modal to edit Reference Month of any entry/payment
+  const [editRefMonthModal, setEditRefMonthModal] = useState<{
+    id: string | number;
+    title: string;
+    currentMonth: string;
+  } | null>(null);
+  const [editModalNewMonth, setEditModalNewMonth] = useState<string>('');
+
+  const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>({});
 
   const [receiptModal, setReceiptModal] = useState<{
     employeeName: string;
@@ -56,6 +80,8 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
       setIsAddingEntry(false);
       setConfirmModal(null);
       setPartialPaymentModal(false);
+      setPaymentMonthModal(null);
+      setEditRefMonthModal(null);
       setIsEditingProfile(false);
       setEditingEntry(null);
       setReceiptModal(null);
@@ -82,6 +108,111 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
   const unpaidTotal = entries
     ?.filter(entry => entry.type !== 'pagamento')
     .reduce((acc, entry) => acc + (entry.isPaid ? 0 : entry.amountCents), 0) || 0;
+
+  const formatMonthLabel = (monthStr: string) => {
+    if (!monthStr || !monthStr.includes('-')) return monthStr;
+    try {
+      const [year, month] = monthStr.split('-');
+      const dateObj = new Date(parseInt(year, 10), parseInt(month, 10) - 1, 1);
+      const monthName = format(dateObj, 'MMMM', { locale: ptBR });
+      return `${monthName.charAt(0).toUpperCase() + monthName.slice(1)} de ${year}`;
+    } catch (e) {
+      return monthStr;
+    }
+  };
+
+  const availableYears = useMemo(() => {
+    const yearsSet = new Set<string>();
+    const currentYear = format(new Date(), 'yyyy');
+    yearsSet.add(currentYear);
+
+    entries.forEach(e => {
+      const refM = e.referenceMonth || e.dateIso.substring(0, 7);
+      if (refM && refM.length >= 4) {
+        yearsSet.add(refM.substring(0, 4));
+      }
+    });
+
+    return Array.from(yearsSet).sort().reverse();
+  }, [entries]);
+
+  const monthlyHistoryData = useMemo(() => {
+    const monthsData: Array<{
+      monthKey: string;
+      monthLabel: string;
+      totalPaid: number;
+      totalServices: number;
+      paymentsList: typeof entries;
+      servicesList: typeof entries;
+    }> = [];
+
+    for (let m = 12; m >= 1; m--) {
+      const monthNumStr = m < 10 ? `0${m}` : `${m}`;
+      const monthKey = `${selectedHistoryYear}-${monthNumStr}`;
+
+      const paymentsList = entries.filter(e => {
+        const refM = e.referenceMonth || e.dateIso.substring(0, 7);
+        return e.type === 'pagamento' && refM === monthKey;
+      });
+
+      const servicesList = entries.filter(e => {
+        const refM = e.referenceMonth || e.dateIso.substring(0, 7);
+        return e.type !== 'pagamento' && refM === monthKey;
+      });
+
+      const totalPaid = paymentsList.reduce((sum, p) => sum + p.value, 0);
+      const totalServices = servicesList.reduce((sum, s) => sum + s.value, 0);
+
+      if (paymentsList.length > 0 || servicesList.length > 0) {
+        monthsData.push({
+          monthKey,
+          monthLabel: formatMonthLabel(monthKey),
+          totalPaid,
+          totalServices,
+          paymentsList,
+          servicesList,
+        });
+      }
+    }
+
+    return monthsData;
+  }, [entries, selectedHistoryYear]);
+
+  const annualTotalPaid = useMemo(() => {
+    return entries
+      .filter(e => {
+        const refM = e.referenceMonth || e.dateIso.substring(0, 7);
+        return e.type === 'pagamento' && refM.startsWith(selectedHistoryYear);
+      })
+      .reduce((sum, e) => sum + e.value, 0);
+  }, [entries, selectedHistoryYear]);
+
+  const annualTotalServices = useMemo(() => {
+    return entries
+      .filter(e => {
+        const refM = e.referenceMonth || e.dateIso.substring(0, 7);
+        return e.type !== 'pagamento' && refM.startsWith(selectedHistoryYear);
+      })
+      .reduce((sum, e) => sum + e.value, 0);
+  }, [entries, selectedHistoryYear]);
+
+  const handleChangeReferenceMonth = (logId: string | number, newMonth: string) => {
+    if (!newMonth) return;
+    const previousLogsState = [...paymentLogs];
+    const updatedLogs = paymentLogs.map(log => {
+      if (String(log.id) === String(logId) || String(log.paymentId) === String(logId)) {
+        return { ...log, referenceMonth: newMonth };
+      }
+      return log;
+    });
+    setPaymentLogs(updatedLogs);
+    savePaymentLogs(updatedLogs);
+    showUndo({
+      label: 'Mês de referência atualizado',
+      onUndo: () => savePaymentLogs(previousLogsState)
+    });
+    setEditRefMonthModal(null);
+  };
 
   const handleTogglePin = async () => {
     if (!employee) return;
@@ -131,7 +262,6 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
     const normalizedName = editName.trim();
     if (!normalizedName) return;
 
-    // Check for duplicate name (case-insensitive, excluding current)
     const existing = await db.employees
       .filter(emp => emp.name.toLowerCase() === normalizedName.toLowerCase() && emp.id !== employeeId)
       .first();
@@ -165,7 +295,8 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
       type: 'diaria',
       note: entryNote,
       isPaid: 0,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      referenceMonth: entryDate.substring(0, 7)
     };
 
     const updatedLogs = [...paymentLogs, newLog];
@@ -206,19 +337,17 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
           ...log,
           value: amount,
           note: editEntryNote,
-          date: editEntryDate
+          date: editEntryDate,
+          referenceMonth: editEntryDate.substring(0, 7)
         };
       }
       return log;
     });
 
-    // If the edited entry is a paid work entry, check if its linked payment needs adjustment
     const updatedEntry = updatedLogs.find(log => String(log.id) === String(editingEntry.id));
     if (updatedEntry && updatedEntry.isPaid && updatedEntry.type !== 'pagamento' && updatedEntry.paymentId) {
-      // Check if it's an individual payment (or any payment that only pays this entry)
       const otherPaidEntries = paymentLogs.filter(log => String(log.id) !== String(editingEntry.id) && log.paymentId && String(log.paymentId) === String(updatedEntry.paymentId));
       if (otherPaidEntries.length === 0) {
-        // Safe to update the single linked payment's value to match the new entry's value
         updatedLogs = updatedLogs.map(log => {
           if (String(log.id) === String(updatedEntry.paymentId)) {
             return { ...log, value: amount };
@@ -244,12 +373,17 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
   const handleMarkAllPaid = async () => {
     const totalToPay = unpaidTotal;
     const unpaidEntriesBefore = entries?.filter(e => !e.isPaid && e.type !== 'pagamento') || [];
-    
-    setConfirmModal({
-      title: 'Marcar tudo como pago',
-      message: `Deseja marcar todos os lançamentos pendentes (${formatCurrency(totalToPay)}) como pagos?`,
-      type: 'success',
-      onConfirm: async () => {
+    if (unpaidEntriesBefore.length === 0) return;
+
+    const defaultMonth = format(new Date(), 'yyyy-MM');
+    setSelectedModalMonth(defaultMonth);
+
+    setPaymentMonthModal({
+      title: 'Marcar Tudo Como Pago',
+      message: 'A qual mês de serviço se refere este pagamento total?',
+      amountText: formatCurrency(totalToPay),
+      defaultMonth,
+      onConfirm: (chosenMonth) => {
         const entryIds = unpaidEntriesBefore.map(e => String(e.id));
         const previousLogsState = [...paymentLogs];
 
@@ -257,17 +391,18 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
         const batchPaymentLog: PaymentLog = {
           id: paymentId,
           employeeId: String(employeeId),
-          value: totalToPay / 100, // convert back from cents to Reais
-          date: format(new Date(), 'yyyy-MM-dd'), // payment date is today!
+          value: totalToPay / 100,
+          date: format(new Date(), 'yyyy-MM-dd'),
           type: 'pagamento',
-          note: 'Pagamento total de débitos',
+          note: `Pagamento total de débitos (Ref: ${formatMonthLabel(chosenMonth)})`,
           isPaid: 1,
-          createdAt: Date.now()
+          createdAt: Date.now(),
+          referenceMonth: chosenMonth
         };
 
         const updatedLogs = paymentLogs.map(log => {
           if (entryIds.includes(String(log.id))) {
-            return { ...log, isPaid: 1, paymentId };
+            return { ...log, isPaid: 1, paymentId, referenceMonth: chosenMonth };
           }
           return log;
         });
@@ -275,21 +410,21 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
 
         setPaymentLogs(updatedLogs);
         savePaymentLogs(updatedLogs);
-        
+
         showUndo({
-          label: 'Pagamento total realizado',
+          label: `Pagamento total realizado (${formatMonthLabel(chosenMonth)})`,
           onUndo: () => {
             savePaymentLogs(previousLogsState);
           }
         });
 
-        setConfirmModal(null);
+        setPaymentMonthModal(null);
         if (employee) {
           setReceiptModal({
             employeeName: employee.name,
             amount: totalToPay,
             date: format(new Date(), 'yyyy-MM-dd'),
-            note: 'Pagamento total de débitos'
+            note: `Pagamento total de débitos - Ref: ${formatMonthLabel(chosenMonth)}`
           });
         }
       }
@@ -298,13 +433,13 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
 
   const handlePartialPayment = async () => {
     setPartialAmount('');
+    setPartialPaymentMonth(format(new Date(), 'yyyy-MM'));
     setPartialPaymentModal(true);
   };
 
   const executePartialPayment = async () => {
     let amountToAbate = Math.abs(Math.round(parseFloat(partialAmount) * 100));
     
-    // Safety: prevent overpayment (brute force protection)
     if (amountToAbate > unpaidTotal) {
       amountToAbate = unpaidTotal;
     }
@@ -320,16 +455,19 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
     let currentLogs = [...paymentLogs];
     let remainingToAbateCents = amountToAbate;
 
+    const chosenMonth = partialPaymentMonth || format(new Date(), 'yyyy-MM');
+
     const paymentId = `pay-partial-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     const partialPaymentLog: PaymentLog = {
       id: paymentId,
       employeeId: String(employeeId),
-      value: originalAmount / 100, // convert back from cents to Reais
-      date: format(new Date(), 'yyyy-MM-dd'), // payment date is today!
+      value: originalAmount / 100,
+      date: format(new Date(), 'yyyy-MM-dd'),
       type: 'pagamento',
-      note: 'Pagamento Parcial',
+      note: `Pagamento Parcial (Ref: ${formatMonthLabel(chosenMonth)})`,
       isPaid: 1,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      referenceMonth: chosenMonth
     };
 
     for (const entry of unpaidEntriesList) {
@@ -347,7 +485,8 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
           ...log, 
           isPaid: 1, 
           paymentId,
-          originalValue: log.originalValue ?? log.value
+          originalValue: log.originalValue ?? log.value,
+          referenceMonth: log.referenceMonth || chosenMonth
         };
       } else {
         const remainingCents = entryAmountCents - remainingToAbateCents;
@@ -358,7 +497,8 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
           value: remainingToAbateCents / 100, 
           isPaid: 1,
           paymentId,
-          originalValue: origVal
+          originalValue: origVal,
+          referenceMonth: log.referenceMonth || chosenMonth
         };
         const newLog: PaymentLog = {
           id: `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
@@ -370,7 +510,8 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
           isPaid: 0,
           createdAt: Date.now(),
           originalValue: origVal,
-          splitFromId: log.id
+          splitFromId: log.id,
+          referenceMonth: log.referenceMonth || chosenMonth
         };
         currentLogs.push(newLog);
         remainingToAbateCents = 0;
@@ -381,9 +522,9 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
 
     setPaymentLogs(currentLogs);
     savePaymentLogs(currentLogs);
-
+    
     showUndo({
-      label: 'Pagamento parcial realizado',
+      label: `Pagamento parcial realizado (${formatMonthLabel(chosenMonth)})`,
       onUndo: () => {
         savePaymentLogs(previousLogsState);
       }
@@ -395,7 +536,7 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
         employeeName: employee.name,
         amount: originalAmount,
         date: format(new Date(), 'yyyy-MM-dd'),
-        note: 'Pagamento Parcial'
+        note: `Pagamento Parcial - Ref: ${formatMonthLabel(chosenMonth)}`
       });
     }
   };
@@ -419,7 +560,7 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
         showUndo({
           label: `Funcionário ${employeeData.name} excluído`,
           onUndo: async () => {
-            await db.employees.add(employeeData);
+            await db.employees.put(employeeData);
             savePaymentLogs(previousLogsState);
           }
         });
@@ -432,34 +573,59 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
 
   const togglePaid = async (entry: any) => {
     if (!entry.id) return;
-    const previousLogsState = [...paymentLogs];
     const previousState = entry.isPaid;
-    const paymentId = `pay-ind-${entry.id}`;
-
-    let updatedLogs: PaymentLog[] = [];
 
     if (!previousState) {
-      // Toggle to PAID: set isPaid to 1, assign paymentId, and create a 'pagamento' log on today's date
-      const paymentLogEntry: PaymentLog = {
-        id: paymentId,
-        employeeId: String(employeeId),
-        value: entry.value,
-        date: format(new Date(), 'yyyy-MM-dd'), // payment happened today!
-        type: 'pagamento',
-        note: entry.note ? `Pagamento de: ${entry.note}` : 'Pagamento de diária',
-        isPaid: 1,
-        createdAt: Date.now()
-      };
+      // Prompt for reference month when marking as paid
+      const defaultMonth = entry.referenceMonth || entry.dateIso.substring(0, 7) || format(new Date(), 'yyyy-MM');
+      setSelectedModalMonth(defaultMonth);
 
-      updatedLogs = paymentLogs.map(log => {
-        if (String(log.id) === String(entry.id)) {
-          return { ...log, isPaid: 1, paymentId };
+      setPaymentMonthModal({
+        title: 'Confirmar Pagamento de Serviço',
+        message: 'A qual mês de serviço se refere este pagamento?',
+        amountText: formatCurrency(entry.amountCents),
+        defaultMonth,
+        onConfirm: (chosenMonth) => {
+          const previousLogsState = [...paymentLogs];
+          const paymentId = `pay-ind-${entry.id}`;
+
+          const paymentLogEntry: PaymentLog = {
+            id: paymentId,
+            employeeId: String(employeeId),
+            value: entry.value,
+            date: format(new Date(), 'yyyy-MM-dd'),
+            type: 'pagamento',
+            note: entry.note ? `Pagamento de: ${entry.note}` : 'Pagamento de diária',
+            isPaid: 1,
+            createdAt: Date.now(),
+            referenceMonth: chosenMonth
+          };
+
+          const updatedLogs = paymentLogs.map(log => {
+            if (String(log.id) === String(entry.id)) {
+              return { ...log, isPaid: 1, paymentId, referenceMonth: chosenMonth };
+            }
+            return log;
+          });
+          updatedLogs.push(paymentLogEntry);
+
+          setPaymentLogs(updatedLogs);
+          savePaymentLogs(updatedLogs);
+
+          showUndo({
+            label: `Lançamento pago (${formatMonthLabel(chosenMonth)})`,
+            onUndo: () => {
+              savePaymentLogs(previousLogsState);
+            }
+          });
+
+          setPaymentMonthModal(null);
         }
-        return log;
       });
-      updatedLogs.push(paymentLogEntry);
     } else {
-      // Toggle to UNPAID: set isPaid to 0, clear paymentId, and handle split/batch payments gracefully
+      // Toggle to UNPAID
+      const previousLogsState = [...paymentLogs];
+      const paymentId = `pay-ind-${entry.id}`;
       const targetPaymentId = entry.paymentId || paymentId;
       const linkedPayment = paymentLogs.find(log => log.type === 'pagamento' && String(log.id) === String(targetPaymentId));
       const otherPaidEntries = paymentLogs.filter(log => String(log.id) !== String(entry.id) && log.paymentId && String(log.paymentId) === String(targetPaymentId));
@@ -467,13 +633,11 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
       let tempLogs = [...paymentLogs];
       if (linkedPayment) {
         if (otherPaidEntries.length === 0) {
-          // Only paid this entry, safely delete the payment record
           tempLogs = tempLogs.filter(log => String(log.id) !== String(linkedPayment.id));
         } else {
-          // Paid multiple entries, reduce the payment's value by the entry's value
           tempLogs = tempLogs.map(log => {
             if (String(log.id) === String(linkedPayment.id)) {
-              const newValue = Math.max(0, log.value - entry.value);
+              const newValue = Math.max(0, Math.round((log.value - entry.value) * 100) / 100);
               return { ...log, value: newValue };
             }
             return log;
@@ -481,28 +645,24 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
         }
       }
 
-      // Update the entry itself to be unpaid and restore original split value if it was a partial payment
-      updatedLogs = tempLogs.map(log => {
+      const updatedLogs = tempLogs.map(log => {
         if (String(log.id) === String(entry.id)) {
           const restoredValue = log.originalValue ?? log.value;
           return { ...log, isPaid: 0, paymentId: undefined, value: restoredValue };
         }
         return log;
+      }).filter(log => !log.splitFromId || String(log.splitFromId) !== String(entry.id));
+
+      setPaymentLogs(updatedLogs);
+      savePaymentLogs(updatedLogs);
+      
+      showUndo({
+        label: 'Lançamento marcado como pendente',
+        onUndo: () => {
+          savePaymentLogs(previousLogsState);
+        }
       });
-
-      // Remove any split-off remaining unpaid logs that were created from this original partial payment split
-      updatedLogs = updatedLogs.filter(log => !log.splitFromId || String(log.splitFromId) !== String(entry.id));
     }
-
-    setPaymentLogs(updatedLogs);
-    savePaymentLogs(updatedLogs);
-    
-    showUndo({
-      label: previousState ? 'Lançamento marcado como pendente' : 'Lançamento marcado como pago',
-      onUndo: () => {
-        savePaymentLogs(previousLogsState);
-      }
-    });
   };
 
   const deleteEntry = async (id: any) => {
@@ -548,7 +708,7 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
               // Reduce payment's value by the deleted entry's value
               updatedLogs = updatedLogs.map(log => {
                 if (String(log.id) === String(linkedPayment.id)) {
-                  const newValue = Math.max(0, log.value - entryToDelete.value);
+                  const newValue = Math.max(0, Math.round((log.value - entryToDelete.value) * 100) / 100);
                   return { ...log, value: newValue };
                 }
                 return log;
@@ -667,126 +827,469 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
             </div>
           )}
         </div>
-      </header>
 
-      <div className="p-4 space-y-4 pb-32">
-        <div className="flex items-center justify-between">
-          <h2 className="text-xl font-bold">Lançamentos</h2>
-          <button 
-            onClick={() => {
-              setEntryAmount((employee.defaultAmountCents / 100).toString());
-              setIsAddingEntry(true);
-            }}
-            className="bg-emerald-600 text-white p-2 rounded-full shadow-lg"
+        {/* Sub-Aba Navigation */}
+        <div className="flex border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-2 gap-2 mt-4 pt-2">
+          <button
+            onClick={() => setActiveSubTab('lancamentos')}
+            className={`py-3 px-3 font-bold text-sm border-b-2 transition-all flex items-center gap-2 ${
+              activeSubTab === 'lancamentos'
+                ? 'border-emerald-600 text-emerald-600 dark:border-emerald-400 dark:text-emerald-400'
+                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
           >
-            <Plus className="w-6 h-6" />
+            <ReceiptText className="w-4 h-4" />
+            Lançamentos ({entries?.length || 0})
+          </button>
+          <button
+            onClick={() => setActiveSubTab('historico_mensal')}
+            className={`py-3 px-3 font-bold text-sm border-b-2 transition-all flex items-center gap-2 ${
+              activeSubTab === 'historico_mensal'
+                ? 'border-emerald-600 text-emerald-600 dark:border-emerald-400 dark:text-emerald-400'
+                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <History className="w-4 h-4" />
+            Histórico Mensal
           </button>
         </div>
+      </header>
 
-        <div className="space-y-3">
-          {entries?.map((entry) => {
-            const isPayment = entry.type === 'pagamento';
-            
-            return (
-              <motion.div
-                key={entry.id}
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                className={`p-4 rounded-2xl border flex items-center justify-between transition-all ${
-                  isPayment
-                    ? 'bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-100 dark:border-emerald-900/30'
-                    : entry.isPaid 
-                      ? 'bg-slate-100 dark:bg-slate-900/50 border-transparent opacity-60' 
-                      : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-sm'
-                }`}
-              >
-                <div className="flex items-center gap-4">
-                  {isPayment ? (
-                    <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center shrink-0">
-                      <ReceiptText className="w-4 h-4" />
+      {activeSubTab === 'lancamentos' ? (
+        <div className="p-4 space-y-4 pb-32">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-bold">Lançamentos</h2>
+            <button 
+              onClick={() => {
+                setEntryAmount((employee.defaultAmountCents / 100).toString());
+                setIsAddingEntry(true);
+              }}
+              className="bg-emerald-600 text-white p-2 rounded-full shadow-lg active:scale-95 transition-all"
+            >
+              <Plus className="w-6 h-6" />
+            </button>
+          </div>
+
+          <div className="space-y-3">
+            {entries?.map((entry) => {
+              const isPayment = entry.type === 'pagamento';
+              const refMonthText = entry.referenceMonth ? formatMonthLabel(entry.referenceMonth) : null;
+              
+              return (
+                <motion.div
+                  key={entry.id}
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className={`p-4 rounded-2xl border flex items-center justify-between transition-all ${
+                    isPayment
+                      ? 'bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-100 dark:border-emerald-900/30'
+                      : entry.isPaid 
+                        ? 'bg-slate-100 dark:bg-slate-900/50 border-transparent opacity-60' 
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-sm'
+                  }`}
+                >
+                  <div className="flex items-center gap-4">
+                    {isPayment ? (
+                      <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center shrink-0">
+                        <ReceiptText className="w-4 h-4" />
+                      </div>
+                    ) : (
+                      <button 
+                        onClick={() => togglePaid(entry)}
+                        className={`w-8 h-8 rounded-full flex items-center justify-center border-2 transition-all shrink-0 ${
+                          entry.isPaid 
+                            ? 'bg-emerald-500 border-emerald-500 text-white' 
+                            : 'border-slate-300 dark:border-slate-700'
+                        }`}
+                      >
+                        {entry.isPaid && <CheckCircle2 className="w-5 h-5" />}
+                      </button>
+                    )}
+                    <div>
+                      <div className="flex items-baseline gap-2 flex-wrap">
+                        <p className={`font-bold text-lg ${isPayment ? 'text-emerald-600 dark:text-emerald-400' : ''}`}>
+                          {isPayment ? '+' : ''}{formatCurrency(entry.amountCents)}
+                        </p>
+                        {entry.originalValue && Math.round(entry.originalValue * 100) !== entry.amountCents && (
+                          <span className="text-xs text-slate-400 font-medium">
+                            (Original: {formatCurrency(Math.round(entry.originalValue * 100))})
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm text-slate-500 flex items-center gap-1 flex-wrap">
+                        <CalendarIcon className="w-3 h-3" /> {format(parseISO(entry.dateIso), 'dd/MM/yyyy')}
+                        {isPayment && (
+                          <span className="text-[10px] font-black text-emerald-700 dark:text-emerald-300 ml-1 bg-emerald-100 dark:bg-emerald-900/40 px-1.5 py-0.5 rounded-md uppercase tracking-wider">
+                            PAGAMENTO
+                          </span>
+                        )}
+                        {refMonthText && (
+                          <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded-md">
+                            Ref: {refMonthText}
+                          </span>
+                        )}
+                      </p>
+                      {entry.note && (
+                        <p className="text-sm text-slate-400 italic flex items-center gap-1 mt-1">
+                          <FileText className="w-3 h-3" /> {entry.note}
+                        </p>
+                      )}
                     </div>
-                  ) : (
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {!isPayment && (
+                      <button 
+                        onClick={() => startEditingEntry(entry)}
+                        className="p-2 text-slate-400 hover:text-emerald-500 transition-colors"
+                        title="Editar Lançamento"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                    )}
+                    {(entry.isPaid === 1 || isPayment) && (
+                      <button 
+                        onClick={() => setReceiptModal({
+                          employeeName: employee.name,
+                          amount: entry.amountCents,
+                          date: entry.dateIso,
+                          note: entry.note
+                        })}
+                        className="p-2 text-emerald-500 hover:text-emerald-600 transition-colors"
+                        title="Gerar Recibo"
+                      >
+                        <ReceiptText className="w-5 h-5" />
+                      </button>
+                    )}
                     <button 
-                      onClick={() => togglePaid(entry)}
-                      className={`w-8 h-8 rounded-full flex items-center justify-center border-2 transition-all shrink-0 ${
-                        entry.isPaid 
-                          ? 'bg-emerald-500 border-emerald-500 text-white' 
-                          : 'border-slate-300 dark:border-slate-700'
-                      }`}
+                      onClick={() => entry.id && deleteEntry(entry.id)}
+                      className="p-2 text-slate-300 hover:text-red-500 transition-colors"
                     >
-                      {entry.isPaid && <CheckCircle2 className="w-5 h-5" />}
+                      <Trash2 className="w-5 h-5" />
                     </button>
-                  )}
-                  <div>
-                    <div className="flex items-baseline gap-2 flex-wrap">
-                      <p className={`font-bold text-lg ${isPayment ? 'text-emerald-600 dark:text-emerald-400' : ''}`}>
-                        {isPayment ? '+' : ''}{formatCurrency(entry.amountCents)}
-                      </p>
-                      {entry.originalValue && Math.round(entry.originalValue * 100) !== entry.amountCents && (
-                        <span className="text-xs text-slate-400 font-medium">
-                          (Original: {formatCurrency(Math.round(entry.originalValue * 100))})
-                        </span>
-                      )}
+                  </div>
+                </motion.div>
+              );
+            })}
+            
+            {entries?.length === 0 && (
+              <div className="text-center py-12 text-slate-400">
+                <p>Nenhum lançamento registrado.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="p-4 space-y-5 pb-32">
+          {/* Seletor de Ano de Exercício */}
+          <div className="flex items-center justify-between gap-2 overflow-x-auto pb-1">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-400 whitespace-nowrap">Ano de Exercício:</span>
+            <div className="flex gap-1.5 overflow-x-auto">
+              {availableYears.map(year => (
+                <button
+                  key={year}
+                  onClick={() => setSelectedHistoryYear(year)}
+                  className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-all whitespace-nowrap ${
+                    selectedHistoryYear === year
+                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  {year}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Card Principal: Total do Ano Trabalhado */}
+          <div className="bg-gradient-to-br from-emerald-600 to-teal-700 text-white p-5 rounded-3xl shadow-xl space-y-3">
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest text-emerald-100">Total Recebido no Ano ({selectedHistoryYear})</p>
+                <h3 className="text-3xl font-black mt-1">{formatCurrency(Math.round(annualTotalPaid * 100))}</h3>
+              </div>
+              <div className="p-3 bg-white/10 rounded-2xl backdrop-blur-md shrink-0">
+                <Award className="w-6 h-6 text-emerald-200" />
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-white/15 flex justify-between items-center text-xs text-emerald-100">
+              <div>
+                <span className="opacity-80">Total de Diárias Geradas: </span>
+                <strong className="text-white font-bold">{formatCurrency(Math.round(annualTotalServices * 100))}</strong>
+              </div>
+              <span className="bg-white/20 px-2 py-0.5 rounded-full font-bold text-[10px]">
+                Ano {selectedHistoryYear}
+              </span>
+            </div>
+          </div>
+
+          {/* Lista de Históricos Mensais do Ano */}
+          <div className="space-y-4 pt-1">
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+              <CalendarDays className="w-4 h-4 text-emerald-500" />
+              Detalhamento Por Mês de Serviço
+            </h3>
+
+            {monthlyHistoryData.length === 0 ? (
+              <div className="bg-white dark:bg-slate-900 p-8 rounded-3xl text-center border border-slate-200 dark:border-slate-800 text-slate-400 space-y-2">
+                <History className="w-8 h-8 mx-auto opacity-30 text-emerald-500" />
+                <p className="font-medium text-sm">Nenhum histórico registrado para o ano de {selectedHistoryYear}.</p>
+              </div>
+            ) : (
+              monthlyHistoryData.map(month => {
+                const isExpanded = expandedMonths[month.monthKey] ?? true;
+                const isFullyPaid = month.totalServices > 0 && month.totalPaid >= month.totalServices;
+                const isPartial = month.totalPaid > 0 && month.totalPaid < month.totalServices;
+                
+                return (
+                  <div key={month.monthKey} className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
+                    <div 
+                      onClick={() => setExpandedMonths(prev => ({ ...prev, [month.monthKey]: !isExpanded }))}
+                      className="p-4 flex items-center justify-between cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
+                    >
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="font-black text-base text-slate-800 dark:text-slate-100">{month.monthLabel}</h4>
+                          {isFullyPaid && (
+                            <span className="text-[10px] font-bold bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full">
+                              Quitado 🟢
+                            </span>
+                          )}
+                          {isPartial && (
+                            <span className="text-[10px] font-bold bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 px-2 py-0.5 rounded-full">
+                              Parcial 🟡
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex gap-3 text-xs mt-1">
+                          <span className="text-emerald-600 dark:text-emerald-400 font-bold">
+                            Recebido: {formatCurrency(Math.round(month.totalPaid * 100))}
+                          </span>
+                          <span className="text-slate-500">
+                            Serviços: {formatCurrency(Math.round(month.totalServices * 100))}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button className="p-1 text-slate-400">
+                          {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                        </button>
+                      </div>
                     </div>
-                    <p className="text-sm text-slate-500 flex items-center gap-1">
-                      <CalendarIcon className="w-3 h-3" /> {format(parseISO(entry.dateIso), 'dd/MM/yyyy')}
-                      {isPayment && (
-                        <span className="text-[10px] font-black text-emerald-700 dark:text-emerald-300 ml-1 bg-emerald-100 dark:bg-emerald-900/40 px-1.5 py-0.5 rounded-md uppercase tracking-wider">
-                          PAGAMENTO
-                        </span>
-                      )}
-                    </p>
-                    {entry.note && (
-                      <p className="text-sm text-slate-400 italic flex items-center gap-1 mt-1">
-                        <FileText className="w-3 h-3" /> {entry.note}
-                      </p>
+
+                    {isExpanded && (
+                      <div className="p-4 pt-2 border-t border-slate-100 dark:border-slate-800/80 space-y-3">
+                        {/* Pagamentos no Mês */}
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-2">
+                            Pagamentos Efetuados Ref. a este Mês ({month.paymentsList.length})
+                          </span>
+                          {month.paymentsList.length === 0 ? (
+                            <p className="text-xs text-slate-400 italic">Nenhum pagamento associado a este mês de serviço.</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {month.paymentsList.map(p => (
+                                <div key={p.id} className="p-3 bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/30 rounded-2xl flex items-center justify-between text-xs">
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <strong className="text-emerald-700 dark:text-emerald-400 text-sm font-black">
+                                        +{formatCurrency(p.amountCents)}
+                                      </strong>
+                                      <span className="text-[10px] bg-emerald-200 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 px-1.5 py-0.5 rounded font-bold">
+                                        PAGO
+                                      </span>
+                                    </div>
+                                    <p className="text-slate-500 mt-0.5">
+                                      Pago em: {format(parseISO(p.dateIso), 'dd/MM/yyyy')}
+                                    </p>
+                                    {p.note && <p className="text-slate-400 italic mt-0.5">{p.note}</p>}
+                                  </div>
+
+                                  <button
+                                    onClick={() => {
+                                      setEditModalNewMonth(p.referenceMonth || p.dateIso.substring(0, 7));
+                                      setEditRefMonthModal({
+                                        id: p.id,
+                                        title: `Mês de Referência do Pagamento (${formatCurrency(p.amountCents)})`,
+                                        currentMonth: p.referenceMonth || p.dateIso.substring(0, 7)
+                                      });
+                                    }}
+                                    className="p-1.5 text-slate-400 hover:text-emerald-600 transition-colors flex items-center gap-1 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700"
+                                    title="Alterar Mês de Referência"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Serviços do Mês */}
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-2">
+                            Diárias e Trabalhos do Mês ({month.servicesList.length})
+                          </span>
+                          {month.servicesList.length === 0 ? (
+                            <p className="text-xs text-slate-400 italic">Nenhuma diária registrada neste mês.</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {month.servicesList.map(s => (
+                                <div key={s.id} className="p-3 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-2xl flex items-center justify-between text-xs">
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <strong className="text-slate-800 dark:text-slate-100 font-bold">
+                                        {formatCurrency(s.amountCents)}
+                                      </strong>
+                                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                                        s.isPaid ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
+                                      }`}>
+                                        {s.isPaid ? 'QUITADO' : 'PENDENTE'}
+                                      </span>
+                                    </div>
+                                    <p className="text-slate-500 mt-0.5">
+                                      Data da Diária: {format(parseISO(s.dateIso), 'dd/MM/yyyy')}
+                                    </p>
+                                    {s.note && <p className="text-slate-400 italic mt-0.5">{s.note}</p>}
+                                  </div>
+
+                                  <button
+                                    onClick={() => {
+                                      setEditModalNewMonth(s.referenceMonth || s.dateIso.substring(0, 7));
+                                      setEditRefMonthModal({
+                                        id: s.id,
+                                        title: `Mês de Referência do Serviço (${formatCurrency(s.amountCents)})`,
+                                        currentMonth: s.referenceMonth || s.dateIso.substring(0, 7)
+                                      });
+                                    }}
+                                    className="p-1.5 text-slate-400 hover:text-emerald-600 transition-colors flex items-center gap-1 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700"
+                                    title="Alterar Mês de Referência"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     )}
                   </div>
-                </div>
-                <div className="flex items-center gap-1">
-                  {!isPayment && (
-                    <button 
-                      onClick={() => startEditingEntry(entry)}
-                      className="p-2 text-slate-400 hover:text-emerald-500 transition-colors"
-                      title="Editar Lançamento"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
-                  )}
-                  {(entry.isPaid === 1 || isPayment) && (
-                    <button 
-                      onClick={() => setReceiptModal({
-                        employeeName: employee.name,
-                        amount: entry.amountCents,
-                        date: entry.dateIso,
-                        note: entry.note
-                      })}
-                      className="p-2 text-emerald-500 hover:text-emerald-600 transition-colors"
-                      title="Gerar Recibo"
-                    >
-                      <ReceiptText className="w-5 h-5" />
-                    </button>
-                  )}
-                  <button 
-                    onClick={() => entry.id && deleteEntry(entry.id)}
-                    className="p-2 text-slate-300 hover:text-red-500 transition-colors"
-                  >
-                    <Trash2 className="w-5 h-5" />
-                  </button>
-                </div>
-              </motion.div>
-            );
-          })}
-          
-          {entries?.length === 0 && (
-            <div className="text-center py-12 text-slate-400">
-              <p>Nenhum lançamento registrado.</p>
-            </div>
-          )}
+                );
+              })
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       <AnimatePresence>
+        {/* Modal de Confirmação do Mês de Referência do Pagamento */}
+        {paymentMonthModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-3xl p-6 space-y-5 shadow-2xl"
+            >
+              <div className="text-center space-y-1">
+                <div className="w-12 h-12 bg-emerald-100 dark:bg-emerald-900/30 rounded-full flex items-center justify-center mx-auto text-emerald-600 dark:text-emerald-400">
+                  <CalendarDays className="w-6 h-6" />
+                </div>
+                <h3 className="text-xl font-bold">{paymentMonthModal.title}</h3>
+                <p className="text-xs text-slate-500">{paymentMonthModal.message}</p>
+                <div className="text-2xl font-black text-emerald-600 dark:text-emerald-400 pt-1">
+                  {paymentMonthModal.amountText}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Mês do Serviço Corresponde a:</label>
+                  <input
+                    type="month"
+                    className="w-full p-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:ring-2 focus:ring-emerald-500 outline-none font-bold text-lg"
+                    value={selectedModalMonth}
+                    onChange={(e) => setSelectedModalMonth(e.target.value)}
+                  />
+                </div>
+
+                {/* Botões Rápidos de Seleção de Mês */}
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedModalMonth(format(new Date(), 'yyyy-MM'))}
+                    className="py-2 px-3 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-300 transition-colors"
+                  >
+                    Mês Atual ({format(new Date(), 'MM/yyyy')})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedModalMonth(format(subMonths(new Date(), 1), 'yyyy-MM'))}
+                    className="py-2 px-3 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-300 transition-colors"
+                  >
+                    Mês Passado ({format(subMonths(new Date(), 1), 'MM/yyyy')})
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2 pt-2">
+                <button
+                  onClick={() => paymentMonthModal.onConfirm(selectedModalMonth)}
+                  className="w-full py-4 rounded-2xl font-bold text-white bg-emerald-600 shadow-lg shadow-emerald-600/20 active:scale-95 transition-all text-base"
+                >
+                  Confirmar Pagamento
+                </button>
+                <button
+                  onClick={() => setPaymentMonthModal(null)}
+                  className="w-full py-3 rounded-2xl font-bold text-slate-500 bg-slate-100 dark:bg-slate-800 active:scale-95 transition-all"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Modal de Alteração Manual de Mês de Referência */}
+        {editRefMonthModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white dark:bg-slate-900 w-full max-w-xs rounded-3xl p-6 space-y-4 shadow-2xl"
+            >
+              <h3 className="text-lg font-bold text-center">{editRefMonthModal.title}</h3>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500 uppercase">Selecione o Mês Correto</label>
+                <input
+                  type="month"
+                  className="w-full p-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:ring-2 focus:ring-emerald-500 outline-none font-bold text-base"
+                  value={editModalNewMonth}
+                  onChange={(e) => setEditModalNewMonth(e.target.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-2 pt-2">
+                <button
+                  onClick={() => handleChangeReferenceMonth(editRefMonthModal.id, editModalNewMonth)}
+                  className="w-full py-3.5 rounded-2xl font-bold text-white bg-emerald-600 shadow-lg shadow-emerald-600/20 active:scale-95 transition-all"
+                >
+                  Salvar Mês de Referência
+                </button>
+                <button
+                  onClick={() => setEditRefMonthModal(null)}
+                  className="w-full py-3 rounded-2xl font-bold text-slate-500 bg-slate-100 dark:bg-slate-800 active:scale-95 transition-all"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Update Pagamento Parcial modal to include Month selection */}
         {isAddingEntry && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <motion.div
@@ -898,6 +1401,15 @@ export function EmployeeDetail({ employeeId, onBack }: EmployeeDetailProps) {
                   value={partialAmount}
                   onChange={(e) => setPartialAmount(e.target.value)}
                   placeholder="0,00"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500 uppercase">Mês de Referência do Serviço</label>
+                <input
+                  type="month"
+                  className="w-full p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none font-bold text-sm"
+                  value={partialPaymentMonth}
+                  onChange={(e) => setPartialPaymentMonth(e.target.value)}
                 />
               </div>
               <div className="flex flex-col gap-2 pt-2">

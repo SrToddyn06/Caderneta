@@ -64,8 +64,8 @@ export async function scheduleDailyReminder(time: string = '18:00'): Promise<boo
       notifications: [
         {
           id: 1800, // fixed ID for this recurring notification
-          title: 'Caderneta Diária 📝',
-          body: 'Hora de checar os valores do dia dos seus funcionários e anotar os serviços!',
+          title: 'Hora de organizar!',
+          body: 'Verifique os valores dos funcionários hoje.',
           schedule: {
             on: {
               hour,
